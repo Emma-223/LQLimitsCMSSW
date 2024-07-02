@@ -144,7 +144,7 @@ def WriteCondorSubFile(filename, shFilename, queue="workday", outputFilesToGet=[
         subfile.write("periodic_release =  (NumJobStarts < 3) && ((CurrentTime - EnteredCurrentStatus) > 600)\n")
         subfile.write("\n")
         subfile.write("+JobFlavour=\"{}\"\n".format(queue))
-        subfile.write("MY.WantOS = \"el7\"\n")
+        subfile.write("MY.WantOS = \"el9\"\n")
         subfile.write("queue 1\n")
 
 
@@ -154,7 +154,6 @@ def WriteCondorShFile(condorDir, filename, mass, combineCmd, limitCmd="", signal
         shfile.write("ulimit -s unlimited\n")
         shfile.write("set -e\n")
         shfile.write("cd {}\n".format(condorDir))
-        shfile.write("export SCRAM_ARCH={}\n").format("slc7_amd64_gcc900")  # SCRAM_ARCH which belongs to the cmssw/os used
         shfile.write("source /cvmfs/cms.cern.ch/cmsset_default.sh\n")
         shfile.write("eval `scramv1 runtime -sh`\n")
         shfile.write("cd -\n")
@@ -874,7 +873,6 @@ if __name__ == "__main__":
     doAsymptoticLimits = False
     blinded = True
     massList = list(range(300, 3100, 100))
-    # massList = list(range(300, 2000, 100))
     # massList = list(range(300, 400, 100))
     betasToScan = list(np.linspace(0.002, 1, 500))[:-1] + [0.9995]
     
@@ -1039,6 +1037,7 @@ if __name__ == "__main__":
                             limits, limitErrs, quantiles = ExtractAsymptoticLimitResultRoot(asymptoticRootFileName)
                             rValuesByQuantile = dict(zip(quantiles, limits))
                             #FIXME: add writing of r-value scan file here
+                            rValuesByMassAndQuantile[mass] = dict(zip(quantiles, limits))
                     if options.doBetaScan:
                         rValuesByMassBetaAndQuantile = {}
                         betaDirName = dirName+"/betaScan/asymptoticLimits"
