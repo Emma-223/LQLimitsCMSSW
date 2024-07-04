@@ -257,7 +257,7 @@ def SubmitLimitJobsBatch(mass, dirName, listFailedCommands, quantile, signalScal
         betaIndex = -1
     outputFiles = []
     WriteCondorSubFile(condorFile, Path(shFilename).name, queue, outputFiles)
-    WriteCondorShFile(Path(condorDir).resolve(), shFilename, mass, cmd, signalScaleFactor, quantile, rMin, rMax)
+    WriteCondorShFile(Path(condorDir).resolve(), shFilename, mass, cmd, limitCmd, signalScaleFactor, quantile, rMin, rMax, betaIndex)
     if not dryRun:
         cmd = "condor_submit subFiles/{}".format(Path(condorFile).name)
         runCommandArgs = [cmd, condorDir, None, True]
@@ -284,7 +284,7 @@ def SubmitHybridNewBatch(args):
         taskName += '.signalScaleFactor{}'.format(round(signalScaleFactor, 6))
     sigSFRound = round(signalScaleFactor, 6)
     combinedOutputFile = "higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid.root".format(sigSFRound, mass, quant)
-    limitCmd = GetComputeLimitsFromGridCommand(workspace, mass, combinedOutputFile, quantile, sigSFRound)
+    limitCmd = GetComputeLimitsFromGridCommand(workspace, mass, combinedOutputFile, quantile, sigSFRound, rMin, rMax)
     queue = "workday"
     SubmitLimitJobsBatch(mass, dirName, listFailedCommands, quantile, signalScaleFactor, rMin, rMax, taskName, cmdArgs, queue, limitCmd)
 
@@ -340,7 +340,7 @@ def RunAsymptoticInteractive(workspace, mass, dirName, batch, blinded=True, sign
     return Path(sorted(glob.glob(dirName+'/higgsCombineTest.AsymptoticLimits.mH{}.*.root'.format(mass)), key=os.path.getmtime)[-1]).resolve()
 
 
-def GetComputeLimitsFromGridCommand(workspace, mass, filename, quantile, signalScaleFact):
+def GetComputeLimitsFromGridCommand(workspace, mass, filename, quantile, signalScaleFact, rMin=1, rMax=200):
     rAbsAcc = 0.00001
     rRelAcc = 0.005
     if signalScaleFact != -1:
@@ -352,7 +352,9 @@ def GetComputeLimitsFromGridCommand(workspace, mass, filename, quantile, signalS
     cmd += ' {}'.format(workspace)
     # cmd += ' -v1'
     cmd += ' -M HybridNew'
-    cmd += ' --rMax 100'
+    if rMin > 0:
+        cmd += ' --rMin {}'.format(rMin)
+    cmd += ' --rMax {}'.format(rMax)
     cmd += ' --LHCmode LHC-limits'
     cmd += ' --readHybridResults'
     cmd += ' --grid={}'.format(filename)
@@ -532,19 +534,22 @@ def GetBetasToSubmit(mass):
 def CheckErrorFile(errFileName, throwException=True):
     # print("\tChecking error file {}...".format(errFileName), end = "", flush=True)
     messagesToIgnore = ["[WARNING] Minimization finished with status 1 (covariance matrix forced positive definite), this could indicate a problem with the minimum!"]
-    typesOfIgnoredMessages = ["minimization status 1 warning"]
-    instancesOfIgnoredMessages = [0]
+    messagesToIgnore.append("Info in <TCanvas::Print>: pdf file limit_scan")
+    typesOfIgnoredMessages = ["minimization status 1 warning", "limit scan pdf created"]
+    instancesOfIgnoredMessages = [0]*len(messagesToIgnore)
     with open(errFileName, "r") as errFile:
         for line in errFile:
             # if any(msg in line for msg in messagesToIgnore):
             if len(line):
+                ignoreLine = False
                 for idx, msg in enumerate(messagesToIgnore):
                     if msg in line:
                         instancesOfIgnoredMessages[idx] += 1
-                    else:
-                        print(colored("Found unexpected content '{}' in {}".format(line, errFileName), "red"))
-                        if throwException:
-                            raise RuntimeError("Found unexpected content '{}' in {}".format(line, errFileName))
+                        ignoreLine = True
+                if not ignoreLine:
+                    print(colored("Found unexpected content '{}' in {}".format(line, errFileName), "red"))
+                    if throwException:
+                        raise RuntimeError("Found unexpected content '{}' in {}".format(line, errFileName))
     for idx, count in enumerate(instancesOfIgnoredMessages):
         if count > 0:
             print(colored("Found {} error message(s) of type {} in {}".format(count, typesOfIgnoredMessages[idx], errFileName), "red"))
@@ -556,22 +561,26 @@ def ReadBatchResults(massList, condorDir):
         listOfWorkspaceFiles = sorted(glob.glob(dirName + "/datacards/*.m{}.root".format(mass)), key=os.path.getmtime)
         if len(listOfWorkspaceFiles) != 1:
             raise RuntimeError("Globbing for {} did not result in one file as expected, but {}".format(workspaceFileName, listOfWorkspaceFiles))
+        rLimitsByMassAndQuantile[mass] = manager.dict()
+        xsecLimitsByMassAndQuantile[mass] = manager.dict()
+        signalScaleFactorsByMassAndQuantile[mass] = manager.dict()
         cardWorkspace = Path(listOfWorkspaceFiles[-1]).resolve()
         for quantileExp in quantilesExpected:
+            signalScaleFactorsByMassAndQuantile[mass][str(quantileExp)] = {}
             quantile = "quant{:.3f}".format(quantileExp) if quantileExp > 0 else "."
             quantileStr = str(quantileExp).replace(".", "p")
             globString = condorDir+'/error/hybridNewLimits.M{}.{}.*.0.err'.format(mass, quantileStr)
             errFileName = FindFile(globString)
             CheckErrorFile(errFileName, False)  # don't throw exception
-            # now run HybridNew again to get limits from grid
-            globString = condorDir+'/higgsCombine.signalScaleFactor*.HybridNew.mH{}.quant{}.grid.root'.format(mass, quantileExp)
-            rootFileName = FindFile(globString)
-            resultFileName = ComputeLimitsFromGrid(cardWorkspace, mass, condorDir, rootFileName, quantileExp)
-            # now extract limits from the root file produced above
-            # globString = condorDir+'/higgsCombineTest.HybridNew.mH{}.quant{}.root'.format(mass, quantileExp)
+            # # now run HybridNew again to get limits from grid
+            # globString = condorDir+'/higgsCombine.signalScaleFactor*.HybridNew.mH{}.quant{}.grid.root'.format(mass, quantileExp)
             # rootFileName = FindFile(globString)
-            # limit, limitErr, quantileFromFile, signalScaleFactor = ExtractLimitResult(rootFileName)
-            limit, limitErr, quantileFromFile, signalScaleFactor = ExtractLimitResult(resultFileName)
+            # resultFileName = ComputeLimitsFromGrid(cardWorkspace, mass, condorDir, rootFileName, quantileExp)
+            # # now extract limits from the root file produced above
+            # limit, limitErr, quantileFromFile, signalScaleFactor = ExtractLimitResult(resultFileName)
+            globString = condorDir+'/higgsCombine.signalScaleFactor1.0.HybridNew.mH{}.{}.root'.format(mass, quantile)
+            rootFileName = FindFile(globString)
+            limit, limitErr, quantileFromFile, signalScaleFactor = ExtractLimitResult(rootFileName)
             rLimitsByMassAndQuantile[mass][str(quantileExp)] = limit
             xsecLimitsByMassAndQuantile[mass][str(quantileExp)] = limit * xsThByMass[float(mass)]
             signalScaleFactorsByMassAndQuantile[mass][str(quantileExp)] = signalScaleFactor
@@ -873,7 +882,7 @@ if __name__ == "__main__":
     doAsymptoticLimits = False
     blinded = True
     massList = list(range(300, 3100, 100))
-    # massList = list(range(300, 400, 100))
+    # massList = list(range(300, 2200, 100))
     betasToScan = list(np.linspace(0.002, 1, 500))[:-1] + [0.9995]
     
     quantilesExpected = [0.025, 0.16, 0.5, 0.84, 0.975]
