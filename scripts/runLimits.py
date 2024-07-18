@@ -120,18 +120,21 @@ def MakeCondorDirs(dirName):
             Path(idir).mkdir(exist_ok=True)
 
 
-def WriteCondorSubFile(filename, shFilename, queue="workday", outputFilesToGet=[]):
+def WriteCondorSubFile(filename, shFilename, rMin, rMax, queue="workday", extractLimits=False, inputFiles=[]):
+    scanJobs = 1
+    if rMin > 0 and rMax > 0 and not extractLimits:
+        scanJobs = gridScanPoints / gridPointsPerJob
     basename = shFilename.replace("condor_", "").replace(".sh", "")
     with open(filename, "w") as subfile:
         subfile.write("executable = subFiles/" + shFilename + "\n")
         subfile.write("arguments = $(ProcId)\n")
         subfile.write("output                = out/"   + basename + ".$(ClusterId).$(ProcId).out\n")
         subfile.write("error                 = error/" + basename + ".$(ClusterId).$(ProcId).err\n")
-        subfile.write("log                   = log/"   + basename + ".$(ClusterId).log\n")
+        subfile.write("log                   = log/"   + basename + ".$(ClusterId).$(ProcId).log\n")
         subfile.write("\n")
-        #if len(outputFilesToGet):
-        #    subfile.write("transfer_output_files = {}\n".format(",".join(outputFilesToGet)))
-        #    subfile.write("\n")
+        if len(inputFiles):
+            subfile.write("transfer_input_files = {}\n".format(",".join(inputFiles)))
+            subfile.write("\n")
         subfile.write('transfer_output_remaps = "combine_logger.out=out/' + basename + '.$(ClusterId).$(ProcId).combine_logger.out"\n')
         subfile.write("\n")
         subfile.write("should_transfer_files = YES\n")
@@ -145,7 +148,7 @@ def WriteCondorSubFile(filename, shFilename, queue="workday", outputFilesToGet=[
         subfile.write("\n")
         subfile.write("+JobFlavour=\"{}\"\n".format(queue))
         subfile.write("MY.WantOS = \"el9\"\n")
-        subfile.write("queue 1\n")
+        subfile.write("queue {}\n".format(int(scanJobs)))
 
 
 def WriteCondorShFile(condorDir, filename, mass, combineCmd, limitCmd="", signalScaleFactor=1.0, quantile=-1, rMin=-1, rMax=-1, betaIndex=-1):
@@ -158,37 +161,49 @@ def WriteCondorShFile(condorDir, filename, mass, combineCmd, limitCmd="", signal
         shfile.write("eval `scramv1 runtime -sh`\n")
         shfile.write("cd -\n")
         shfile.write("\n")
-        shfile.write("if [ $1 -eq 0 ]; then\n")
         rootFileString = ""
+        sigSFRound = round(signalScaleFactor, 6)
         if betaIndex != -1:
             rootFileString = "betaIndex"+betaIndex
-        if rMin > 0 and rMax > 0:
-            sigSFRound = round(signalScaleFactor, 6)
-            scanPoints = 50
-            stepSize = (rMax-rMin)/scanPoints
-            print("INFO: Writing commands to compute grid of {} limits in the range r=[{}, {}] by steps of {}".format(scanPoints, rMin, rMax, stepSize))
-            for rVal in np.arange(rMin, rMax+stepSize, stepSize):
+        if len(limitCmd):
+            if len(combineCmd):
+                raise RuntimeError("Can't handle case when we have both a combine command '{}' and a limit command '{}' specified.". format(combineCmd, limitCmd))
+            quant = "quant{}.".format(quantile) if quantile > 0 else ""
+            combinedOutputFile = "higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}gridAll.root".format(sigSFRound, mass, quant)
+            shfile.write("hadd -fk207 {} higgsCombine.*.root\n".format(combinedOutputFile))
+            shfile.write(limitCmd.format(combinedOutputFile)+"\n")
+        elif rMin > 0 and rMax > 0:
+            stepSize = (rMax-rMin)/gridScanPoints
+            pointsPerJob = gridPointsPerJob
+            if gridScanPoints < pointsPerJob:
+                pointsPerJob = gridScanPoints
+            print("INFO: Writing commands to compute grid of {} limits in the range r=[{}, {}] by steps of {}".format(gridScanPoints, rMin, rMax, stepSize))
+            shfile.write("if [ $1 -eq 0 ]; then\n")
+            jobIdx = 0
+            scanPoints = np.linspace(rMin, rMax, num=gridScanPoints)
+            for rValIdx, rVal in enumerate(scanPoints):
                 thisStepCmd = combineCmd
                 thisStepCmd += ' -n .signalScaleFactor{}.POINT.{}'.format(sigSFRound, rVal)
                 if len(rootFileString):
                     thisStepCmd += "." + rootFileString
                 thisStepCmd += ' --singlePoint {}'.format(rVal)
                 shfile.write("  {}\n".format(thisStepCmd))
-            quant = "quant{}.".format(quantile) if quantile > 0 else ""
-            combinedOutputFile = "higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid.root".format(sigSFRound, mass, quant)
-            shfile.write("  hadd -fk207 {} higgsCombine.*.root\n".format(combinedOutputFile))
-            shfile.write("  ls -ltrph\n")
-            shfile.write("  rm higgsCombine.*POINT.*root\n")  # remove individual point files so that condor doesn't transfer them back
-            if len(limitCmd):
-                shfile.write("  {}\n".format(limitCmd))
+                if (rValIdx+1) % pointsPerJob == 0:
+                    quant = "quant{}.".format(quantile) if quantile > 0 else ""
+                    combinedOutputFile = "higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid{}.root".format(sigSFRound, mass, quant, jobIdx)
+                    shfile.write("  hadd -fk207 {} higgsCombine.*.root\n".format(combinedOutputFile))
+                    shfile.write("  ls -ltrph\n")
+                    shfile.write("  rm higgsCombine.*POINT.*root\n")  # remove individual point files so that condor doesn't transfer them back
+                    shfile.write("fi\n")
+                    jobIdx += 1
+                    if rValIdx+1 < len(scanPoints):
+                        shfile.write("if [ $1 -eq {} ]; then\n".format(jobIdx))
         else:
             if len(rootFileString):
                 combineCmd += ' -n {}'.format(rootFileString)
             # print("WriteCondorShFile for mass {}: write cmd='{}'".format(mass, combineCmd))
             shfile.write("  {}\n".format(combineCmd))
             combinedOutputFile = ""
-        shfile.write("ls -ltrph\n")
-        shfile.write("fi\n")
     return combinedOutputFile
 
 
@@ -197,7 +212,7 @@ def GetHybridNewCommandArgs(workspace, mass, dirName, quantile, genAsimovToyFile
     clsAcc = 0 if batch else 0.001
     toys = 10000
     # toys = 500  # reduced for shape-based limits as test, but still took hours
-    cmd = '{}'.format(workspace)
+    cmd = '{}'.format(str(workspace).split("/")[-1] if doBatch else workspace)
     cmd += ' -v1'
     cmd += ' -M HybridNew'
     cmd += ' --LHCmode LHC-limits'
@@ -220,14 +235,14 @@ def GetHybridNewCommandArgs(workspace, mass, dirName, quantile, genAsimovToyFile
     if quantile > 0:
         cmd += ' --expectedFromGrid {}'.format(quantile)
         if genAsimovToyFile != "":
-            cmd += ' -D {}:toys/toy_asimov'.format(genAsimovToyFile)
+            cmd += ' -D {}:toys/toy_asimov'.format(str(genAsimovToyFile).split("/")[-1] if doBatch else genAsimovToyFile)
     return cmd
 
 
 def GetAsymptoticCommandArgs(workspace, mass, dirName, blinded, signalScaleFactor, rMin, rMax):
     rAbsAcc = 0.0001
     # rMax = 150
-    cmd = ' {}'.format(workspace)
+    cmd = ' {}'.format(str(workspace).split("/")[-1] if doBatch else workspace)
     cmd += ' -v1'
     cmd += ' -M AsymptoticLimits'
     cmd += ' --seed -1'
@@ -244,21 +259,22 @@ def GetAsymptoticCommandArgs(workspace, mass, dirName, blinded, signalScaleFacto
     return cmd
 
 
-def SubmitLimitJobsBatch(mass, dirName, listFailedCommands, quantile, signalScaleFactor, rMin, rMax, taskName, cmdArgs, queue="workday", limitCmd="", dryRun=False):
+def SubmitLimitJobsBatch(mass, dirName, listFailedCommands, quantile, signalScaleFactor, rMin, rMax, taskName, cmdArgs, limitCmd, queue="workday", inputFiles=[]):
     # print("SubmitLimitJobsBatch() called with cmdArgs='{}'".format(cmdArgs))
     condorDir = dirName.strip("/")+"/condor"
     condorSubfileDir = dirName.strip("/")+"/condor/subFiles"
-    cmd = "combine " + cmdArgs
+    cmd = ""
+    if len(cmdArgs):
+        cmd = "combine " + cmdArgs
     shFilename = condorSubfileDir + "/condor_" + taskName + ".sh"
     condorFile = shFilename.replace(".sh", ".sub")
     if "betaIndex" in taskName:
         betaIndex = taskName[taskName.find("betaIndex")+9:]
     else:
         betaIndex = -1
-    outputFiles = []
-    WriteCondorSubFile(condorFile, Path(shFilename).name, queue, outputFiles)
     WriteCondorShFile(Path(condorDir).resolve(), shFilename, mass, cmd, limitCmd, signalScaleFactor, quantile, rMin, rMax, betaIndex)
-    if not dryRun:
+    WriteCondorSubFile(condorFile, Path(shFilename).name, rMin, rMax, queue, len(limitCmd), inputFiles)
+    if not options.dryRun:
         cmd = "condor_submit subFiles/{}".format(Path(condorFile).name)
         runCommandArgs = [cmd, condorDir, None, True]
         try:
@@ -278,15 +294,31 @@ def SubmitHybridNewBatch(args):
     workspace, mass, dirName, listFailedCommands, quantile, genAsimovToyFile, signalScaleFactor, rMin, rMax = args
     cmdArgs = GetHybridNewCommandArgs(workspace, mass, dirName, quantile, genAsimovToyFile, signalScaleFactor, True, rMin*0.9, rMax*1.1)
     quantileStr = str(quantile).replace(".", "p")
-    quant = "quant{}.".format(quantile) if quantile > 0 else ""
-    taskName = 'hybridNewLimits.M{}.{}'.format(mass, quantileStr)
-    if signalScaleFactor != 1.0:
-        taskName += '.signalScaleFactor{}'.format(round(signalScaleFactor, 6))
-    sigSFRound = round(signalScaleFactor, 6)
-    combinedOutputFile = "higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid.root".format(sigSFRound, mass, quant)
-    limitCmd = GetComputeLimitsFromGridCommand(workspace, mass, combinedOutputFile, quantile, sigSFRound, rMin, rMax)
-    queue = "workday"
-    SubmitLimitJobsBatch(mass, dirName, listFailedCommands, quantile, signalScaleFactor, rMin, rMax, taskName, cmdArgs, queue, limitCmd)
+    if options.submitLimitJobsAfterGridGen:
+        queue = "espresso"
+        taskName = 'hybridNewLimits.M{}.{}'.format(mass, quantileStr)
+        if signalScaleFactor != 1.0:
+            taskName += '.signalScaleFactor{}'.format(round(signalScaleFactor, 6))
+        quant = "quant{}.".format(quantile) if quantile > 0 else ""
+        sigSFRound = round(signalScaleFactor, 6)
+        condorDir = dirName.strip("/")+"/condor"
+        globStr = condorDir+"/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid*.root".format(sigSFRound, mass, quant)
+        inputFiles = GetFileList(globStr)
+        # of course, now the condorDir part has to be removed
+        inputFiles = [f[f.rfind("/")+1:] for f in inputFiles]
+        inputFiles.append(str(workspace))
+        combinedOutputFile = "higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}gridAll.root".format(sigSFRound, mass, quant)
+        limitCmd = GetComputeLimitsFromGridCommand(workspace, mass, combinedOutputFile, quantile, sigSFRound, rMin, rMax)
+        SubmitLimitJobsBatch(mass, dirName, listFailedCommands, quantile, signalScaleFactor, rMin, rMax, taskName, "", limitCmd, queue, inputFiles)
+    else:
+        queue = "longlunch"
+        taskName = 'hybridNewGridGen.M{}.{}'.format(mass, quantileStr)
+        if signalScaleFactor != 1.0:
+            taskName += '.signalScaleFactor{}'.format(round(signalScaleFactor, 6))
+        inputFiles = [str(workspace)]
+        if len(str(genAsimovToyFile)):
+            inputFiles.append(str(genAsimovToyFile))
+        SubmitLimitJobsBatch(mass, dirName, listFailedCommands, quantile, signalScaleFactor, rMin, rMax, taskName, cmdArgs, "", queue, inputFiles)
 
 
 def SubmitAsymptoticBatch(args):
@@ -298,7 +330,8 @@ def SubmitAsymptoticBatch(args):
         taskName += '.signalScaleFactor{}'.format(round(signalScaleFactor, 6))
         taskName += '.betaIndex{}'.format(index)
     queue = "espresso"
-    SubmitLimitJobsBatch(mass, dirName, listFailedCommands, -1, signalScaleFactor, rMin, rMax, taskName, cmdArgs, queue)
+    inputFiles = [str(workspace)]
+    SubmitLimitJobsBatch(mass, dirName, listFailedCommands, -1, signalScaleFactor, rMin, rMax, taskName, cmdArgs, "", queue, inputFiles)
 
 
 # http://cms-analysis.github.io/HiggsAnalysis-CombinedLimit/part3/nonstandard/#nuisance-parameter-impacts
@@ -357,7 +390,10 @@ def GetComputeLimitsFromGridCommand(workspace, mass, filename, quantile, signalS
     cmd += ' --rMax {}'.format(rMax)
     cmd += ' --LHCmode LHC-limits'
     cmd += ' --readHybridResults'
-    cmd += ' --grid={}'.format(filename)
+    if len(filename):
+        cmd += ' --grid={}'.format(filename)
+    else:
+        cmd += ' --grid={}'
     cmd += ' --expectedFromGrid {}'.format(quantile)
     cmd += ' -m {}'.format(mass)
     cmd += ' --rAbsAcc {}'.format(rAbsAcc)
@@ -536,6 +572,7 @@ def CheckErrorFile(errFileName, throwException=True):
     messagesToIgnore = ["[WARNING] Minimization finished with status 1 (covariance matrix forced positive definite), this could indicate a problem with the minimum!"]
     messagesToIgnore.append("Info in <TCanvas::Print>: pdf file limit_scan")
     typesOfIgnoredMessages = ["minimization status 1 warning", "limit scan pdf created"]
+    showIgnoreMessages = [True, False]
     instancesOfIgnoredMessages = [0]*len(messagesToIgnore)
     with open(errFileName, "r") as errFile:
         for line in errFile:
@@ -551,12 +588,36 @@ def CheckErrorFile(errFileName, throwException=True):
                     if throwException:
                         raise RuntimeError("Found unexpected content '{}' in {}".format(line, errFileName))
     for idx, count in enumerate(instancesOfIgnoredMessages):
-        if count > 0:
+        if count > 0 and showIgnoreMessages[idx]:
             print(colored("Found {} error message(s) of type {} in {}".format(count, typesOfIgnoredMessages[idx], errFileName), "red"))
     # print("OK")
 
 
+def CheckForErrorAndResultFiles(massList, condorDir):
+    allFilesPresent = True
+    for mass in massList:
+        for quantileExp in quantilesExpected:
+            quantile = "quant{:.3f}".format(quantileExp) if quantileExp > 0 else "."
+            quantileStr = str(quantileExp).replace(".", "p")
+            globString = condorDir+'/error/hybridNewLimits.M{}.{}.*.0.err'.format(mass, quantileStr)
+            try:
+                errFileName = FindFile(globString)
+            except RuntimeError as e:
+                print("Caught exception trying to find error file: '{}'".format(e))
+                allFilesPresent = False
+                continue
+            globString = condorDir+'/higgsCombine.signalScaleFactor1.0.HybridNew.mH{}.{}.root'.format(mass, quantile)
+            try:
+                rootFileName = FindFile(globString)
+            except RuntimeError as e:
+                print("Caught exception: trying to find root file '{}'".format(e))
+                allFilesPresent = False
+    return allFilesPresent
+
+
 def ReadBatchResults(massList, condorDir):
+    if not CheckForErrorAndResultFiles(massList, condorDir):
+        return {}, {}
     for mass in massList:
         listOfWorkspaceFiles = sorted(glob.glob(dirName + "/datacards/*.m{}.root".format(mass)), key=os.path.getmtime)
         if len(listOfWorkspaceFiles) != 1:
@@ -570,7 +631,10 @@ def ReadBatchResults(massList, condorDir):
             quantile = "quant{:.3f}".format(quantileExp) if quantileExp > 0 else "."
             quantileStr = str(quantileExp).replace(".", "p")
             globString = condorDir+'/error/hybridNewLimits.M{}.{}.*.0.err'.format(mass, quantileStr)
-            errFileName = FindFile(globString)
+            try:
+                errFileName = FindFile(globString)
+            except RuntimeError as e:
+                print("Caught exception: {}".format(e.what()))
             CheckErrorFile(errFileName, False)  # don't throw exception
             # # now run HybridNew again to get limits from grid
             # globString = condorDir+'/higgsCombine.signalScaleFactor*.HybridNew.mH{}.quant{}.grid.root'.format(mass, quantileExp)
@@ -878,6 +942,8 @@ def MakeResultTableBetaScan(masses, xsecLimitsByMassAndQuantile, quantileExp="0.
 ####################################################################################################
 if __name__ == "__main__":
     doBatch = True
+    gridPointsPerJob = 10
+    gridScanPoints = 50
     doShapeBasedLimits = False
     doAsymptoticLimits = False
     blinded = True
@@ -887,10 +953,11 @@ if __name__ == "__main__":
     
     quantilesExpected = [0.025, 0.16, 0.5, 0.84, 0.975]
     xsThFilename = "$LQANA/config/xsection_theory_13TeV_scalarPairLQ.txt"
+    # xsThFilename = "$LQANA/config/xsection_theory_13TeV_stopPair.txt"
     commonCombineArgs = " --setParameters signalScaleParam={} --freezeParameters signalScaleParam --trackParameters signalScaleParam"
     
     parser = OptionParser(
-        usage="%prog datacard",
+        usage="%prog -d datacard -n name [commands/options]",
     )
     parser.add_option(
         "-d",
@@ -913,6 +980,15 @@ if __name__ == "__main__":
         dest="name",
         help="name of limit calculation (for bookkeeping)",
         metavar="name",
+    )
+    parser.add_option(
+        "-t",
+        "--dryRun",
+        dest="dryRun",
+        help="don't submit jobs to condor, just write the submission files (dry run)",
+        metavar="dryRun",
+        action="store_true",
+        default=False,
     )
     parser.add_option(
         "-i",
@@ -951,6 +1027,15 @@ if __name__ == "__main__":
         default=False,
     )
     parser.add_option(
+        "-l",
+        "--submitLimitsAfterGridGen",
+        dest="submitLimitJobsAfterGridGen",
+        help="submit the limit jobs (after grid generation)",
+        metavar="submitLimitJobsAfterGridGen",
+        action="store_true",
+        default=False,
+    )
+    parser.add_option(
         "-f",
         "--fileWithRValueRanges",
         dest="fileWithRValueRanges",
@@ -968,9 +1053,9 @@ if __name__ == "__main__":
     )
     (options, args) = parser.parse_args()
     if options.datacard is None and options.readResults is None:
-        raise RuntimeError("Need either option -d to specify datacard, or option r to specify reading limit results from batch")
+        raise RuntimeError("Need either option d to specify datacard, or option r to specify reading limit results from batch")
     if options.name is None:
-        raise RuntimeError("Option -n to specify name of limit results dir is required")
+        raise RuntimeError("Option n to specify name of limit results dir is required")
     if options.doBetaScan and not doBatch:
         raise RuntimeError("Won't do beta scan without batch submission enabled (see doBatch parameter inside script).")
     
@@ -1267,7 +1352,10 @@ if __name__ == "__main__":
                 condorDir = dirName.rstrip("/")+"/condor"
                 print("INFO: Reading results from batch from {}...".format(condorDir), flush=True)
                 xsecLimitsByMassAndQuantile, signalScaleFactorsByMassAndQuantile = ReadBatchResults(massList, condorDir)
-                print("DONE", flush=True)
+                if len(xsecLimitsByMassAndQuantile) and len(signalScaleFactorsByMassAndQuantile):
+                    print("DONE", flush=True)
+                else:
+                    raise RuntimeError("Got empty dicts back from ReadBatchResults; something wrong happened there.")
             masses, shadeMasses, xsMedExp, xsOneSigmaExp, xsTwoSigmaExp, xsObs = CreateArraysForPlotting(xsecLimitsByMassAndQuantile)
             print("mData =", list(masses))
             # print("x_shademasses =", list(shadeMasses))
