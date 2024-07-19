@@ -2,6 +2,9 @@
 
 # S. I. Cooper, Apr. 2024
 # modified from https://github.com/bellan/VVXAnalysis/blob/c40b91f1147a784f3748d5bf2dd3ae1d28540931/Combine/scripts/tableYields.py
+#
+# Usage example:
+# python3 scripts/tablesFromDatacard.py 2016preVFP/eejj/eejj_11jul2024_bdt_LQToDEle/scaled/tmp_card_file_LQToDEle.txt 2016postVFP/eejj/eejj_11jul2024_bdt_LQToDEle/scaled/tmp_card_file_LQToDEle.txt 2017/eejj/eejj_11jul2024_bdt_LQToDEle/scaled/tmp_card_file_LQToDEle.txt 2018/eejj/eejj_11jul2024_bdt_LQToDEle/scaled/tmp_card_file_LQToDEle.txt > limits11July_allRunII_LQToDEle/tablesFromDatacard.txt
 
 from argparse import ArgumentParser
 from optparse import OptionParser
