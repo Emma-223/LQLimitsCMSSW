@@ -1,24 +1,52 @@
 #!/usr/bin/env python3
 
-from ROOT import gROOT, gStyle, gPad, TCanvas, TH2F, TGraph, kBlue, kCyan, kGreen, kYellow, kBlack, kRed, TPolyLine, TLegend, TLatex
-import CMS_lumi
-from tdrstyle import setTDRStyle
+from ROOT import gROOT, gStyle, gPad, TCanvas, TH2F, TGraph, kBlue, kCyan, kGreen, kYellow, kBlack, kRed, TPolyLine, TLegend, TLatex, TColor
 import math
 import numpy
 import os
+import cmsstyle as CMS
 
 
-def ComboPlot(dirName=".", beta_vals=[], m_expected_lljj=[], m_observed_lljj=[]):
+def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
     doObserved = True if len(m_observed_lljj) else False
+    beta_vals_2sd = set(expected_lljj["0.025"]["betas"])
+    beta_vals_1sd = set(expected_lljj["0.16"]["betas"])
+    beta_vals_med = set(expected_lljj["0.5"]["betas"])
+    beta_vals_1su = set(expected_lljj["0.84"]["betas"])
+    beta_vals_2su = set(expected_lljj["0.975"]["betas"])
+    beta_vals = list(beta_vals_med.intersection(beta_vals_2sd, beta_vals_1sd, beta_vals_1su, beta_vals_2su))
+    print("beta_vals=", beta_vals)
+    
+    beta_valsdub = list(beta_vals)
+    beta_valsdub.extend(reversed(beta_vals))
+    # m_expected_lljj = expected_lljj["0.5"]["massLimits"]
+    # m_expected_1s_lljj = expected_lljj["0.16"]["massLimits"]
+    # m_expected_1s_lljj.extend(reversed(expected_lljj["0.84"]["massLimits"]))
+    # m_expected_2s_lljj = expected_lljj["0.025"]["massLimits"]
+    # m_expected_2s_lljj.extend(reversed(expected_lljj["0.975"]["massLimits"]))
+    m_expected_med_lljj = []
+    m_expected_1s_lljj = [] 
+    m_expected_2s_lljj = []
+
+    for beta in beta_vals:
+        m_expected_2s_lljj.append(expected_lljj["0.025"]["massLimits"][expected_lljj["0.025"]["betas"].index(beta)])
+        m_expected_1s_lljj.append(expected_lljj["0.16"]["massLimits"][expected_lljj["0.16"]["betas"].index(beta)])
+        m_expected_med_lljj.append(expected_lljj["0.5"]["massLimits"][expected_lljj["0.5"]["betas"].index(beta)])
+
+    for beta in reversed(beta_vals):
+        m_expected_1s_lljj.append(expected_lljj["0.84"]["massLimits"][expected_lljj["0.84"]["betas"].index(beta)])
+        m_expected_2s_lljj.append(expected_lljj["0.975"]["massLimits"][expected_lljj["0.975"]["betas"].index(beta)])
+
+
     numbetas = len(beta_vals)
-    beta_valsdub = []
-    ind = numbetas
-    for ii in range(0, numbetas*2):
-        if ii < numbetas:
-            beta_valsdub.append(beta_vals[ii])
-        else:
-            ind -= 1
-            beta_valsdub.append(beta_vals[ind])
+    # beta_valsdub = []
+    # ind = numbetas
+    # for ii in range(0, numbetas*2):
+    #     if ii < numbetas:
+    #         beta_valsdub.append(beta_vals[ii])
+    #     else:
+    #         ind -= 1
+    #         beta_valsdub.append(beta_vals[ind])
     
     for ii in range(0, numbetas):
         # if beta_vals[ii] == 0.5:
@@ -46,8 +74,9 @@ def ComboPlot(dirName=".", beta_vals=[], m_expected_lljj=[], m_observed_lljj=[])
     title = ";M_{LQ} [GeV];#beta"
     
     # integrated luminosity
-    lint = "35.9 fb^{-1}"
-    sqrts = "#sqrt{s} = 13 TeV"
+    CMS.SetLumi(intLumi)
+    CMS.SetExtraText("Preliminary")
+    CMS.ResetAdditionalInfo()
      
     n_exclude = 204
     
@@ -58,30 +87,44 @@ def ComboPlot(dirName=".", beta_vals=[], m_expected_lljj=[], m_observed_lljj=[])
     beta_CMS = [0.0333,0.0337,0.0345,0.0350,0.0357,0.0376,0.0411,0.0445,0.0478,0.0516,0.0550,0.0593,0.0636,0.0681,0.0724,0.0767,0.0804,0.0841,0.0881,0.0914,0.0934,0.0963,0.1043,0.1135,0.1225,0.1303,0.1382,0.1453,0.1541,0.1613,0.1678,0.1710,0.1756,0.1824,0.1903,0.1966,0.2027,0.2098,0.2154,0.2197,0.2271,0.2328,0.2440,0.2547,0.2679,0.2781,0.2896,0.2992,0.3090,0.3218,0.3360,0.3485,0.3591,0.3764,0.3936,0.4092,0.4252,0.4411,0.4563,0.4722,0.4854,0.4974,0.5005,0.5085,0.5167,0.5215,0.5281,0.5378,0.5489,0.5597,0.5697,0.5786,0.5876,0.5956,0.6076,0.6185,0.6279,0.6383,0.6478,0.6586,0.6668,0.6757,0.6811,0.6874,0.6929,0.7014,0.7093,0.7205,0.7330,0.7441,0.7503,0.7589,0.7727,0.7815,0.7886,0.7994,0.8154,0.8281,0.8350,0.8470,0.8626,0.8724,0.8855,0.8974,0.9094,0.9200,0.9356,0.9498,0.9632,0.9746,0.9823,0.9897,0.9961,1.0000,1.0000,0.0333]
     
     gROOT.SetBatch(True)
-    setTDRStyle()
-    gStyle.SetPadLeftMargin(0.14)
-    gROOT.ForceStyle()
+    # gStyle.SetPadLeftMargin(0.14)
+
+    plotLow = 0
+    plotHigh = 1.0
+    c = CMS.cmsCanvas('c', 300, 1700, plotLow, plotHigh, 'M_{LQ} (GeV)', '#beta', False, 0, extraSpace=0.025)
+    # c.SetBottomMargin(0.13)
+    # c.SetLeftMargin(0.14)
+    c.SetRightMargin(0.06)
+    c.SetLogy()
+    # c.cd()
+    # c.SetGridx()
+    # c.SetGridy()
+    # CMS.cmsStyle.SetPadGridX(True)
+    # CMS.cmsStyle.SetPadGridY(True)
+    # CMS.UpdatePad()
+    gPad.SetGridx()
+    gPad.SetGridy()
+    gPad.RedrawAxis("g")
+
+    CMS.GetcmsCanvasHist(c).SetLabelSize(0.04, "X")
+    CMS.GetcmsCanvasHist(c).SetLabelSize(0.04, "Y")
+
+    # bg = TH2F("bg",title, 20, 300., 2000., 100, 0., 1.)
+    # bg.SetStats(False)
+    # bg.GetXaxis().CenterTitle()
+    # bg.GetYaxis().CenterTitle()
+    # bg.SetTitleOffset(1.,"X")
+    # bg.SetTitleOffset(1.05,"Y")
+    # #  bg.GetXaxis().SetNdivisions(505)
+    # bg.GetXaxis().SetLabelSize(0.03)
+    # bg.GetYaxis().SetLabelSize(0.03)
     
-    bg = TH2F("bg",title, 20, 300., 2000., 100, 0., 1.)
-    bg.SetStats(False)
-    bg.GetXaxis().CenterTitle()
-    bg.GetYaxis().CenterTitle()
-    bg.SetTitleOffset(1.,"X")
-    bg.SetTitleOffset(1.05,"Y")
-    #  bg.GetXaxis().SetNdivisions(505)
-    bg.GetXaxis().SetLabelSize(0.03)
-    bg.GetYaxis().SetLabelSize(0.03)
     
-    c = TCanvas("c","",800,800)
-    c.cd()
-    
-    bg.Draw()
-    
-    gr_excl_CMS = TPolyLine(116, numpy.array(mass_CMS, dtype="f"), numpy.array(beta_CMS, dtype="f"), "")
-    # gr_excl_CMS.SetLineWidth(3)
-    gr_excl_CMS.SetLineColor(14)
-    gr_excl_CMS.SetFillColor(14)
-    gr_excl_CMS.SetFillStyle(3344)
+    # gr_excl_CMS = TPolyLine(116, numpy.array(mass_CMS, dtype="f"), numpy.array(beta_CMS, dtype="f"), "")
+    # # gr_excl_CMS.SetLineWidth(3)
+    # gr_excl_CMS.SetLineColor(14)
+    # gr_excl_CMS.SetFillColor(14)
+    # gr_excl_CMS.SetFillStyle(3344)
     
     # gr_excl_CMSborder = TPolyLine(n_exclude, numpy.array(mass_CMSATLAS, dtype="f"), numpy.array(beta_CMSATLAS, dtype="f"), "")
     # # gr_excl_CMS.SetLineWidth(3)
@@ -90,11 +133,16 @@ def ComboPlot(dirName=".", beta_vals=[], m_expected_lljj=[], m_observed_lljj=[])
     # gr_excl_CMSborder.SetFillStyle(3344)
     
     #  ------------------------------------ LLJJ CURVES  -------------------------------------
-    if doObserved:
-        beta_vs_m_lljj_observed = TPolyLine(numbetas, numpy.array(m_observed_lljj, dtype="f"), numpy.array(beta_vals, dtype="f"))
-    beta_vs_m_lljj_expected = TPolyLine(numbetas, numpy.array(m_expected_lljj, dtype="f"), numpy.array(beta_vals, dtype="f"))
+    beta_vs_m_lljj_expected = TGraph(numbetas, numpy.array(m_expected_med_lljj, dtype="f"), numpy.array(beta_vals, dtype="f"))
     # beta_vs_m_lljj_observed_shade = TPolyLine(numbetas*2, m_2sigma_lljj, beta_valsdub)
     if doObserved:
+        beta_vs_m_lljj_observed = TGraph(massPoints, mData, xsUp_observed)  # FIXME
+        beta_vs_m_lljj_observed.SetMarkerStyle(21)
+        beta_vs_m_lljj_observed.SetMarkerColor(kBlack)
+        beta_vs_m_lljj_observed.SetLineColor(kBlack)
+        beta_vs_m_lljj_observed.SetLineWidth(2)
+        beta_vs_m_lljj_observed.SetLineStyle(1)
+        beta_vs_m_lljj_observed.SetMarkerSize(1)
         beta_vs_m_lljj_observed.SetLineWidth(2)
         beta_vs_m_lljj_observed.SetLineColor(kBlue)
         beta_vs_m_lljj_observed.SetLineStyle(1)
@@ -107,7 +155,7 @@ def ComboPlot(dirName=".", beta_vals=[], m_expected_lljj=[], m_observed_lljj=[])
     #beta_vs_m_lljj_observed_shade.SetFillStyle(3425)
     #beta_vs_m_lljj_observed_shade.SetFillColor(kGreen+2)
     #beta_vs_m_lljj_observed_shade.Draw("f")
-    
+
     # ------------------------------------ LVJJ CURVES  -------------------------------------
     # beta_vs_m_lvjj_observed = TPolyLine(numbetas, numpy.array(m_observed_lvjj, dtype="f"), numpy.array(beta_vals, dtype="f"))
     # beta_vs_m_lvjj_expected = TPolyLine(numbetas, numpy.array(m_expected_lvjj, dtype="f"), numpy.array(beta_vals, dtype="f"))
@@ -146,20 +194,31 @@ def ComboPlot(dirName=".", beta_vals=[], m_expected_lljj=[], m_observed_lljj=[])
     # gr_excl_CMSborder.Draw("L")
     # gr_excl_CMSborder.Draw("F")
     
-    beta_vs_m_lljj_expected.Draw("C")
+    exshade1 = TGraph(2*numbetas, numpy.array(m_expected_1s_lljj, dtype="f"), numpy.array(beta_valsdub, dtype="f"))
+    exshade2 = TGraph(2*numbetas, numpy.array(m_expected_2s_lljj, dtype="f"), numpy.array(beta_valsdub, dtype="f"))
+    CMS.cmsDraw(exshade2, "f", fcolor=TColor.GetColor("#F5BB54"))
+    CMS.cmsDraw(exshade1, "f", fcolor=TColor.GetColor("#607641"))
+
+    # beta_vs_m_lljj_expected.Draw("C")
+    # CMS.cmsDraw(beta_vs_m_lljj_expected, "C")
+    CMS.cmsDraw(beta_vs_m_lljj_expected, "lp", marker=0, mcolor=kBlack, lcolor=kBlack, lwidth=2, lstyle=7, msize=0.001)
     # beta_vs_m_lvjj_expected.Draw("C")
     if doObserved:
-        beta_vs_m_lljj_observed.Draw("C")
+        CMS.cmsDraw(beta_vs_m_lljj_observed, "C")
     # beta_vs_m_lvjj_observed.Draw("C")
     # beta_vs_m_comb_expected.Draw("C")
     # beta_vs_m_comb_observed.Draw("C")
     
-    gPad.RedrawAxis()
+    # gPad.RedrawAxis()
     
-    legend = TLegend(.63,.2,.93,.44)
+    legXSize = 0.3
+    legYSize = 0.2
+    legXStart = 0.2
+    legYStart = 0.65
+    legend = CMS.cmsLeg(legXStart, legYStart, legXStart+legXSize, legYStart+legYSize, textSize=0.036, textFont=42)
     legend.SetBorderSize(1)
-    # legend.SetFillColor(0)
-    # legend.SetFillStyle(0)
+    legend.SetFillColor(0)
+    legend.SetFillStyle(1001)
     legend.SetTextFont(42)
     legend.SetMargin(0.15)
     # legend.SetHeader("95% CL limits")
@@ -177,36 +236,20 @@ def ComboPlot(dirName=".", beta_vals=[], m_expected_lljj=[], m_observed_lljj=[])
     # legend.AddEntry(gr_excl_CMSborder,"CMS, 7 TeV, 5.0 fb^{-1}","f")
     
     # legend.AddEntry(gr_excl_D0,"D#oslash (Obs.), 1 fb^{-1}","l")
-    legend.Draw()
-    
-    # draw the lumi text on the canvas
-    CMS_lumi.lumi_13TeV = lint
-    CMS_lumi.writeExtraText = 1
-    CMS_lumi.extraText = "Preliminary"
-    CMS_lumi.lumiTextSize = 0.7
-    CMS_lumi.relPosX = 0.1  # control position of extraText
-    CMS_lumi.hOffset = 0.0
-    iPos = 0
-    CMS_lumi.CMS_lumi(c, 4, iPos)
+    # legend.Draw()
     
     # c.SetGridx()
     # c.SetGridy()
     c.RedrawAxis()
     
-    l3 = TLatex()
-    l3.SetTextAlign(12)
-    l3.SetTextFont(42)
-    l3.SetNDC()
-    l3.SetTextSize(0.06)
-    l3.SetTextColor(kBlue)
-    l3.SetTextAngle(30)
-    l3.DrawLatex(0.24,0.35,"eejj")
-    # l3.SetTextColor(kRed)
-    # l3.SetTextAngle(-20)
-    # l3.DrawLatex(0.25,0.84,"e#nujj")
-    # l3.SetTextColor(kBlack)
-    # l3.SetTextAngle(79)
-    # l3.DrawLatex(0.655,0.50,"eejj + e#nujj")
+    # l3 = TLatex()
+    # l3.SetTextAlign(12)
+    # l3.SetTextFont(42)
+    # l3.SetNDC()
+    # l3.SetTextSize(0.05)
+    # l3.SetTextColor(kBlue)
+    # l3.SetTextAngle(30)
+    # l3.DrawLatex(0.24,0.15,"eejj")
     
     # c.SetGridx()
     # c.SetGridy()
