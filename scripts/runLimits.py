@@ -159,7 +159,7 @@ def WriteCondorSubFile(condorDir, filename, shFilename, nJobs, queue="workday", 
         subfile.write("\n")
         subfile.write("should_transfer_files = YES\n")
         subfile.write("when_to_transfer_output = ON_EXIT\n")
-        subfile.write("output_destination = root://eosuser.cern.ch//eos/user/s/scooper/LQ/limits/"+baseDir+"/"+parentDir+"/\n")
+        subfile.write("output_destination = "+eosDir+"/"+baseDir+"/"+parentDir+"/\n")
         subfile.write("MY.XRDCP_CREATE_DIR = True\n")
         subfile.write("\n")
         subfile.write("# Send the job to Held state on failure.\n")
@@ -859,28 +859,24 @@ def get_value(d):
 
 
 def ReadBatchResultParallel(args):
-    cardWorkspace, mass, condorDir, errFile, quantileExp = args
-    quantile = "quant{:.3f}".format(quantileExp) if quantileExp > 0 else "."
-    # quantile = str(quantile).rstrip("0")
-    quantileStr = str(quantileExp).replace(".", "p").rstrip("0")
+    mass, errFile, rootFileName, betaValRound, quantileExp = args
+    # quantile = "quant{:.3f}".format(quantileExp) if quantileExp > 0 else "."
+    # # quantile = str(quantile).rstrip("0")
+    # quantileStr = str(quantileExp).replace(".", "p").rstrip("0")
     # CheckErrorFile(errFile)
-    CheckErrorFile(errFile, True)
-    #lastPart = errFile.split("{}.".format(quantileStr))[-1]
-    #lastPartCut = lastPart.rstrip(".0.err")
-    #sigScaleFact = lastPartCut[0:lastPartCut.rfind(".")].strip("signalScaleFactor")
-    #sigScaleFactRound = round(float(sigScaleFact), 6)
-    lastPart = errFile.split("{}.".format(quantileStr))[-1]
-    lastPartSplit = lastPart.split("/condor")
-    sigScaleFact = lastPartSplit[0].split("signalScaleFactor")[-1]
-    signalScaleFactor = float(sigScaleFact) # FIXME: here, like previously, we should probably use the beta index instead to keep track of the unrounded scale factor
-    # rootGlobString = condorDir+'/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root'.format(sigScaleFactRound, mass, quantile)
-    rootGlobString = str(Path(errFile).parent)+'/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root'.format(sigScaleFact, mass, quantile)
-    rootFileName = FindFile(rootGlobString)
+    CheckErrorFile(errFile, False)
+    # lastPart = errFile.split("{}.".format(quantileStr))[-1]
+    # lastPartSplit = lastPart.split("/condor")
+    # sigScaleFact = lastPartSplit[0].split("signalScaleFactor")[-1]
+    # signalScaleFactor = float(sigScaleFact) # FIXME: here, like previously, we should probably use the beta index instead to keep track of the unrounded scale factor
+    # # rootGlobString = condorDir+'/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root'.format(sigScaleFactRound, mass, quantile)
+    # rootGlobString = str(Path(errFile).parent)+'/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root'.format(sigScaleFact, mass, quantile)
+    # rootFileName = FindFile(rootGlobString)
     # resultFileName = ComputeLimitsFromGrid(cardWorkspace, mass, condorDir, rootFileName, quantileExp, sigScaleFact)
     limit, limitErr, quantileFromFile, signalScaleFactor = ExtractLimitResult(rootFileName)
     # betaVal = math.sqrt(signalScaleFactor)
-    betaVal = math.sqrt(float(sigScaleFact))
-    betaValRound = str(round(betaVal, 6))
+    # betaVal = math.sqrt(float(sigScaleFact))
+    # betaValRound = str(round(betaVal, 6))
     # print()
     # print("INFO: [3] ReadBatchResultParallel(): store limit*xs[{}]={}*{}={} in rLimitsByMassAndQuantile={} for key={} at betaValRound={} from rootFileName={}".format(
     #     mass, limit, xsThByMass[float(mass)], limit * xsThByMass[float(mass)], get_value(rLimitsByMassAndQuantile), str(quantileExp), betaValRound, rootFileName), flush=True)
@@ -896,10 +892,19 @@ def ReadBatchResultsBetaScan(massList, condorDir):
         for quantileExp in quantilesExpected:
             for mass in massList:
                 quantileStr = str(quantileExp).replace(".", "p").rstrip("0")
-                globString = condorDir+'/limits/hybridNewLimits.M{}.{}.*/condor*.0.err'.format(mass, quantileStr)
-                errorFiles = GetFileList(globString)
+                globString = condorDir+'/limits/hybridNewLimits.M{}.{}.*/condor*.0.err'
+                try:
+                    errorFiles = GetFileList(globString.format(mass, quantileStr))
+                    nJobs += len(errorFiles)
+                except RuntimeError:
+                    globString2 = condorDir+'/gridGen/hybridNewGridGenAndLimits.M{}*/condor*.0.err'
+                    try:
+                        errorFiles = GetFileList(globString2.format(mass))
+                        nJobs += 5 * len(errorFiles)
+                        globString = globString2
+                    except RuntimeError as e:
+                        raise RuntimeError("Caught exception: "+str(e)+"; this is after already trying and failing to glob for {}".format(globString))
                 # print("Got {} error files for mass {}, quantile {}".format(len(errorFiles), mass, quantileExp))
-                nJobs += len(errorFiles)
         # print("INFO: reading {} jobs".format(nJobs), flush=True)
         task_id = progress.add_task("[cyan]Reading batch results...", total=nJobs)
         with multiprocessing.Pool(ncores) as pool:
@@ -915,19 +920,22 @@ def ReadBatchResultsBetaScan(massList, condorDir):
                     cardWorkspace = Path(listOfWorkspaceFiles[-1]).resolve()
                     quantileStr = str(quantileExp).replace(".", "p").rstrip("0")
                     quantile = "quant{:.3f}".format(quantileExp) if quantileExp > 0 else "."
-                    # quantile = str(quantile).rstrip("0")
-                    globString = condorDir+'/limits/hybridNewLimits.M{}.{}.*/condor*.0.err'.format(mass, quantileStr)
-                    errorFiles = GetFileList(globString)
+                    errorFiles = GetFileList(globString.format(mass, quantileStr))
                     for errFile in errorFiles:
-                        # CheckErrorFile(errFile, False)  # XXX FIXME TEST - don't throw
-                        lastPart = errFile.split("{}.".format(quantileStr))[-1]
-                        lastPartSplit = lastPart.split("/condor")
-                        sigScaleFact = lastPartSplit[0].split("signalScaleFactor")[-1]
-                        signalScaleFactor = float(sigScaleFact) # FIXME: here, like previously, we should probably use the beta index instead to keep track of the unrounded scale factor
-                        # sigScaleFactRound = round(float(sigScaleFact), 6)
-                        # rootGlobString = condorDir+'/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root'.format(sigScaleFactRound, mass, quantile)
-                        # rootFileName = FindFile(rootGlobString)
-                        # limit, limitErr, quantileFromFile, signalScaleFactor = ExtractLimitResult(rootFileName)
+                        if "GridGenAndLimits" in errFile:
+                            taskName = Path(errFile).parent.name
+                            sigScaleFact = taskName.split("signalScaleFactor")[-1]
+                            signalScaleFactor = float(sigScaleFact) # FIXME: here, like previously, we should probably use the beta index instead to keep track of the unrounded scale factor
+                            eosPath = eosDir[eosDir.rfind("//")+1:]  # remove root://.../ prefix
+                            rootGlobString = eosPath+"/"+dirName+"/"+taskName+'/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root'.format(sigScaleFact, mass, quantile)
+                            rootFileName = FindFile(rootGlobString)
+                        else:
+                            lastPart = errFile.split("{}.".format(quantileStr))[-1]
+                            lastPartSplit = lastPart.split("/condor")
+                            sigScaleFact = lastPartSplit[0].split("signalScaleFactor")[-1]
+                            signalScaleFactor = float(sigScaleFact) # FIXME: here, like previously, we should probably use the beta index instead to keep track of the unrounded scale factor
+                            rootGlobString = str(Path(errFile).parent)+'/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root'.format(sigScaleFact, mass, quantile)
+                            rootFileName = FindFile(rootGlobString)
                         betaVal = math.sqrt(signalScaleFactor)
                         betaValRound = str(round(betaVal, 6))
                         if not betaValRound in rLimitsByMassAndQuantile[str(quantileExp)].keys():
@@ -944,7 +952,7 @@ def ReadBatchResultsBetaScan(massList, condorDir):
                         # signalScaleFactorsByMassAndQuantile[str(quantileExp)][betaValRound][mass] = signalScaleFactor
                         # print("INFO: [5] ReadBatchResultsBetaScan(): DONE storing xsecLimitsByMassAndQuantile[{}]={}".format(str(quantileExp), get_value(xsecLimitsByMassAndQuantile)), flush=True)
                         try:
-                            pool.apply_async(ReadBatchResultParallel, [[cardWorkspace, mass, condorDir, errFile, quantileExp]], callback = lambda x: progress.advance(task_id), error_callback = partial_quit)
+                            pool.apply_async(ReadBatchResultParallel, [[mass, errFile, rootFileName, betaValRound, quantileExp]], callback = lambda x: progress.advance(task_id), error_callback = partial_quit)
                             # nJobs += 1
                         except KeyboardInterrupt:
                             print("\n\nCtrl-C detected: Bailing.")
@@ -1174,6 +1182,7 @@ if __name__ == "__main__":
     # massList = list(range(300, 3100, 100))
     massList = list(range(300, 1500, 100))
     betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
+    eosDir = "root://eosuser.cern.ch//eos/user/s/scooper/LQ/limits"
     
     quantilesExpected = [0.025, 0.16, 0.5, 0.84, 0.975]
     xsThFilename = "$LQANA/config/xsection_theory_13TeV_scalarPairLQ.txt"
@@ -1594,14 +1603,13 @@ if __name__ == "__main__":
             betaDirName = dirName+"/betaScan"
             condorDir = betaDirName.strip("/")+"/condor"
             if os.path.isfile(betaDirName+'/xsecLimits.json'):
-                print("INFO: Reading beta scan results from batch from json files in {}...".format(betaDirName), flush=True)
+                print("INFO: Reading beta scan results from json files in {}...".format(betaDirName), flush=True)
                 with open(betaDirName+'/xsecLimits.json', 'r') as f:
                     xsecLimitsByMassAndQuantile = json.load(f)
                 with open(betaDirName+'/rLimits.json', 'r') as f:
                     rLimitsByMassAndQuantile = json.load(f)
-                #FIXME
-                # with open(betaDirName+'/massLimits.json', 'r') as f:
-                #     massLimitsByQuantileAndBetaVal = json.load(f)
+                with open(betaDirName+'/massLimits.json', 'r') as f:
+                    massLimitsByQuantileAndBetaVal = json.load(f)
                 with open(betaDirName+'/comboArrays.json', 'r') as f:
                     comboArraysByQuantile = json.load(f)
             else:
