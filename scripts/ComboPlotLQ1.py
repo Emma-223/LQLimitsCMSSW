@@ -14,7 +14,7 @@ def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
     beta_vals_med = set(expected_lljj["0.5"]["betas"])
     beta_vals_1su = set(expected_lljj["0.84"]["betas"])
     beta_vals_2su = set(expected_lljj["0.975"]["betas"])
-    beta_vals = list(beta_vals_med.intersection(beta_vals_2sd, beta_vals_1sd, beta_vals_1su, beta_vals_2su))
+    beta_vals = sorted(list(beta_vals_med.intersection(beta_vals_2sd, beta_vals_1sd, beta_vals_1su, beta_vals_2su)))
     print("beta_vals=", beta_vals)
     
     beta_valsdub = list(beta_vals)
@@ -32,6 +32,7 @@ def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
         m_expected_2s_lljj.append(expected_lljj["0.025"]["massLimits"][expected_lljj["0.025"]["betas"].index(beta)])
         m_expected_1s_lljj.append(expected_lljj["0.16"]["massLimits"][expected_lljj["0.16"]["betas"].index(beta)])
         m_expected_med_lljj.append(expected_lljj["0.5"]["massLimits"][expected_lljj["0.5"]["betas"].index(beta)])
+    print("m_expected_med_lljj=", m_expected_med_lljj)
 
     for beta in reversed(beta_vals):
         m_expected_1s_lljj.append(expected_lljj["0.84"]["massLimits"][expected_lljj["0.84"]["betas"].index(beta)])
@@ -156,44 +157,6 @@ def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
     #beta_vs_m_lljj_observed_shade.SetFillColor(kGreen+2)
     #beta_vs_m_lljj_observed_shade.Draw("f")
 
-    # ------------------------------------ LVJJ CURVES  -------------------------------------
-    # beta_vs_m_lvjj_observed = TPolyLine(numbetas, numpy.array(m_observed_lvjj, dtype="f"), numpy.array(beta_vals, dtype="f"))
-    # beta_vs_m_lvjj_expected = TPolyLine(numbetas, numpy.array(m_expected_lvjj, dtype="f"), numpy.array(beta_vals, dtype="f"))
-    # # beta_vs_m_lvjj_observed_shade = TPolyLine(numbetas*2, m_2sigma_lvjj, beta_valsdub)
-    # beta_vs_m_lvjj_observed.SetLineWidth(2)
-    # beta_vs_m_lvjj_observed.SetLineColor(kRed)
-    # beta_vs_m_lvjj_observed.SetLineStyle(1)
-    # beta_vs_m_lvjj_expected.SetLineWidth(2)
-    # beta_vs_m_lvjj_expected.SetLineColor(kRed)
-    # beta_vs_m_lvjj_expected.SetLineStyle(2)
-    # #beta_vs_m_lvjj_observed_shade.SetFillStyle(3452)
-    # #beta_vs_m_lvjj_observed_shade.SetFillColor(kRed)
-    # #beta_vs_m_lvjj_observed_shade.Draw("f")
-    
-    # ------------------------------------ COMBO CURVES  -------------------------------------
-    # beta_vs_m_comb_observed = TPolyLine(numbetas, numpy.array(m_observed_combo, dtype="f"), numpy.array(beta_vals, dtype="f"))
-    # beta_vs_m_comb_expected = TPolyLine(numbetas, numpy.array(m_expected_combo, dtype="f"), numpy.array(beta_vals, dtype="f"))
-    # beta_vs_m_comb_expected_shade2 = TGraph(numbetas*2, numpy.array(m_2sigma_combo, dtype="f"), numpy.array(beta_valsdub, dtype="f"))
-    # beta_vs_m_comb_expected_shade1 = TGraph(numbetas*2, numpy.array(m_1sigma_combo, dtype="f"), numpy.array(beta_valsdub, dtype="f"))
-    # beta_vs_m_comb_observed.SetLineWidth(4)
-    # beta_vs_m_comb_observed.SetLineColor(kBlack)
-    # beta_vs_m_comb_expected.SetLineStyle(1)
-    # # beta_vs_m_comb_expected_shade.SetLineWidth(1)
-    # beta_vs_m_comb_expected_shade1.SetFillStyle(1001)
-    # beta_vs_m_comb_expected_shade1.SetFillColor(kGreen)
-    # beta_vs_m_comb_expected_shade2.SetFillStyle(1001)
-    # beta_vs_m_comb_expected_shade2.SetFillColor(kYellow)
-    # beta_vs_m_comb_expected.SetLineWidth(4)
-    # beta_vs_m_comb_expected.SetLineColor(kBlack)
-    # beta_vs_m_comb_expected.SetLineStyle(2)
-    
-    # ------------------------------------ DRAW  -------------------------------------
-    # beta_vs_m_comb_expected_shade2.Draw("f")
-    # beta_vs_m_comb_expected_shade1.Draw("f")
-    
-    # gr_excl_CMSborder.Draw("L")
-    # gr_excl_CMSborder.Draw("F")
-    
     exshade1 = TGraph(2*numbetas, numpy.array(m_expected_1s_lljj, dtype="f"), numpy.array(beta_valsdub, dtype="f"))
     exshade2 = TGraph(2*numbetas, numpy.array(m_expected_2s_lljj, dtype="f"), numpy.array(beta_valsdub, dtype="f"))
     CMS.cmsDraw(exshade2, "f", fcolor=TColor.GetColor("#F5BB54"))
@@ -209,7 +172,8 @@ def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
     # beta_vs_m_comb_expected.Draw("C")
     # beta_vs_m_comb_observed.Draw("C")
     
-    # gPad.RedrawAxis()
+    c.RedrawAxis()
+    gPad.RedrawAxis("g")
     
     legXSize = 0.3
     legYSize = 0.2
@@ -237,10 +201,6 @@ def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
     
     # legend.AddEntry(gr_excl_D0,"D#oslash (Obs.), 1 fb^{-1}","l")
     # legend.Draw()
-    
-    # c.SetGridx()
-    # c.SetGridy()
-    c.RedrawAxis()
     
     # l3 = TLatex()
     # l3.SetTextAlign(12)
