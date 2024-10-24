@@ -19,13 +19,17 @@ Example: `python3 scripts/runLimits.py -d combCardFile.txt -n myLimitDir -e`
 
 2. Read the estimation results into a json file.
 
-Example: `python3 scripts/runLimits.py -d combCardFile.txt -n myLimitDir -e -r1
+Example: `python3 scripts/runLimits.py -d combCardFile.txt -n myLimitDir -e -r`
 
-3. Use the estimatation results to submit limit-setting jobs.  Note that the r-value scan range estimations can be used from earlier results, as the scan ranges probably won't change much.
+3. Use the estimation results to submit grid generation jobs.  Note that the r-value scan range estimations can be used from earlier results, as the scan ranges probably won't change much.
 
-Example: `python3 scripts/runLimits.py -d combCardFile.txt -n myLimitDir -f myLimitDir/asymptoticLimits/condor/rValues.json`
+Example: `python3 scripts/runLimits.py -d combCardFile.txt -n myLimitDir -f myLimitDir/asymptoticLimits/condor/rValues.json -g`
 
-4. Once the limit-setting jobs are done, extract the limits, make plots and tables:
+4. Once the grid generation jobs are done, you can submit the jobs to calculate the limits using them:
+
+Example: `python3 scripts/runLimits.py -d combCardFile.txt -n myLimitDir -f myLimitDir/asymptoticLimits/condor/rValues.json -l`
+
+5. Once the limit-setting jobs are done, extract the limits, make plots and tables:
 
 Example: `python3 scripts/runLimits.py -d combCardFile.txt -n myLimitDir -f myLimitDir/asymptoticLimits/condor/rValues.json -r | tee myLimitDir/limitsNominal.log`
 
