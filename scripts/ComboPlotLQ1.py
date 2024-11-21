@@ -59,7 +59,7 @@ def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
         #     print("##   ")
         if beta_vals[ii] > 0.999:
             print("## ----------------   B = 1 Limits ----------------------")
-            print("##   lljj Expected :", m_expected_lljj[ii])
+            print("##   lljj Expected :", m_expected_med_lljj[ii])
             if doObserved:
                 print("##   lljj Observed :", m_observed_lljj[ii])
             # print("##  combo Expected :", m_expected_combo[ii])
@@ -92,7 +92,7 @@ def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
 
     plotLow = 0
     plotHigh = 1.0
-    c = CMS.cmsCanvas('c', 300, 1700, plotLow, plotHigh, 'M_{LQ} (GeV)', '#beta', False, 0, extraSpace=0.025)
+    c = CMS.cmsCanvas('c', 300, 2000, plotLow, plotHigh, 'M_{LQ} (GeV)', '#beta', False, 0, extraSpace=0.025)
     # c.SetBottomMargin(0.13)
     # c.SetLeftMargin(0.14)
     c.SetRightMargin(0.06)
