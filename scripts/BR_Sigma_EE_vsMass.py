@@ -129,7 +129,7 @@ def BR_Sigma_EE_vsMass(dirName=".", intLumi="35.9", mData = [], x_shademasses = 
     xsTh_logY = []
     if doObserved:
         for ii in range(0, massPoints):
-            xsUp_observed_logY[ii] = math.log(xsUp_observed[ii])
+            xsUp_observed_logY.append(math.log(xsUp_observed[ii]))
         xsData_vs_m_observed_log = TGraph(massPoints, numpy.array(mData, dtype="f"), numpy.array(xsUp_observed_logY, dtype="f"))
     for ii in range(0, massPoints):
         xsUp_expected_logY.append(math.log(xsUp_expected[ii]))

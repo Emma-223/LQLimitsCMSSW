@@ -250,9 +250,11 @@ def WriteCondorShFile(condorDir, filename, mass, combineCmds=[], limitCmds=[], s
                 rMax = -1
                 if quantile != -1:
                     rMin, rMax = GetRMinAndRMax(mass, quantile, signalScaleFactor)
+                else:
+                    rMin, rMax = GetRMinAndRMax(mass, 0.5, signalScaleFactor)
                 if rMin > 0 and rMax > 0:
                     shfile.write("if [ $1 -eq {} ]; then\n".format(jobIdx))
-                    if quantile < 0.2:
+                    if quantile < 0.2 and quantile > 0:
                         pointsPerJob = gridPointsPerJobLowQuantiles
                     else:
                         pointsPerJob = gridPointsPerJob
@@ -307,7 +309,10 @@ def GetHybridNewCommandArgs(workspace, mass, dirName, quantiles, genAsimovToyFil
     # toys = 500  # reduced for shape-based limits as test, but still took hours
     cmds = []
     for quantile in quantiles:
-        rMin, rMax = GetRMinAndRMax(mass, quantile, signalScaleFactor)
+        if quantile>0:
+            rMin, rMax = GetRMinAndRMax(mass, quantile, signalScaleFactor)
+        else:
+            rMin, rMax = GetRMinAndRMax(mass, 0.5, signalScaleFactor)
         rMin*=0.9
         rMax*=1.1
         toys = toysDefault
@@ -337,8 +342,11 @@ def GetHybridNewCommandArgs(workspace, mass, dirName, quantiles, genAsimovToyFil
         cmd += commonCombineArgs.format(signalScaleFactor)
         if quantile > 0:
             cmd += ' --expectedFromGrid {}'.format(quantile)
-            if genAsimovToyFile != "":
-                cmd += ' -D {}:toys/toy_asimov'.format(str(genAsimovToyFile).split("/")[-1] if doBatch else genAsimovToyFile)
+            print("INFO: Run with --expectedFromGrid {}".format(quantile))
+        if genAsimovToyFile != "":
+            cmd += ' -D {}:toys/toy_asimov'.format(str(genAsimovToyFile).split("/")[-1] if doBatch else genAsimovToyFile)
+            if quantile < 0:
+                print("INFO: Found quantile {}: Running observed limit with Asimov toys".format(quantile))
         cmds.append(cmd)
     return cmds
 
@@ -512,7 +520,9 @@ def SubmitHybridNewBatch(args):
         # inputFiles = [f[f.rfind("/")+1:] for f in inputFiles]
         inputFiles.append(str(workspace))
         combinedOutputFile = "higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}gridAll.root".format(sigSFRound, mass, quant)
-        limitCmd = GetComputeLimitsFromGridCommand(workspace, mass, combinedOutputFile, quantiles, sigSFRound)
+        limitCmd = GetComputeLimitsFromGridCommand(workspace, mass, combinedOutputFile, quantiles, sigSFRound, toyFile=genAsimovToyFile)
+        if genAsimovToyFile != "":
+            inputFiles.append(str(genAsimovToyFile))
         taskName = 'hybridNewLimits.M{}{}'.format(mass, quantileStr)
         if signalScaleFactor != 1.0:
             taskName += '.signalScaleFactor{}'.format(round(signalScaleFactor, 6))
@@ -588,7 +598,7 @@ def RunAsymptoticInteractive(workspace, mass, dirName, batch, blinded=True, sign
     return Path(sorted(glob.glob(dirName+'/higgsCombineTest.AsymptoticLimits.mH{}.*.root'.format(mass)), key=os.path.getmtime)[-1]).resolve()
 
 
-def GetComputeLimitsFromGridCommand(workspace, mass, filename, quantiles, signalScaleFact, rMin=0, rMax=1000):
+def GetComputeLimitsFromGridCommand(workspace, mass, filename, quantiles, signalScaleFact, rMin=0, rMax=1000, toyFile=""):
     rAbsAcc = 0.00001
     rRelAcc = 0.005
     if signalScaleFact != -1:
@@ -614,7 +624,10 @@ def GetComputeLimitsFromGridCommand(workspace, mass, filename, quantiles, signal
             cmd += ' --grid={}'.format(filename)
         else:
             cmd += ' --grid={}'
-        cmd += ' --expectedFromGrid {}'.format(quantile)
+        if quantile > 0:
+            cmd += ' --expectedFromGrid {}'.format(quantile)
+        if toyFile!="":
+            cmd += " -D {}:toys/toy_asimov".format(str(toyFile).split("/")[-1] if doBatch else toyFile)
         cmd += ' -m {}'.format(mass)
         cmd += ' --rAbsAcc {}'.format(rAbsAcc)
         cmd += ' --rRelAcc {}'.format(rRelAcc)
@@ -840,7 +853,10 @@ def CheckForErrorAndResultFiles(massList, condorDir):
             globStrings = [condorDir+'/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root'.format(signalScaleFactor, mass, quantile)]
             globStrings.append(condorDir+'/gridGen/hybridNewGridGenAndLimits.M{}.{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root'.format(mass, quantileStr,signalScaleFactor, mass, quantile))
             if signalScaleFactor != 1.0:
-                globStrings.append(eosDirName+'/hybridNewLimits.M{}.{}.signalScaleFactor{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root'.format(mass, quantileStr, signalScaleFactor, signalScaleFactor, mass, quantile))
+                if not quantile == ".":
+                    globStrings.append(eosDirName+'/hybridNewLimits.M{}.{}.signalScaleFactor{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root'.format(mass, quantileStr, signalScaleFactor, signalScaleFactor, mass, quantile))
+                else:
+                    globStrings.append(eosDirName+"/hybridNewLimits.M{}.{}.signalScaleFactor{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.root".format(mass, quantileStr, signalScaleFactor, signalScaleFactor, mass))
             else:
                 globStrings.append(eosDirName+'/hybridNewLimits.M{}.{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root'.format(mass, quantileStr, signalScaleFactor, mass, quantile))
             rootFileName = FindFile(globStrings)
@@ -1343,8 +1359,11 @@ if __name__ == "__main__":
     doShapeBasedLimits = False
     doAsymptoticLimits = False
     blinded = True
+    doObservedLimit = True
+    useAsimovData = True #do or don't use asimov data in place of real data
+    #NOTE: if doObservedLimit==True and useAsimovData==True, combine will calculate the observed limit using asimov toys in place of real data
     ncores = 6
-    massList = list(range(300, 2200, 100))
+    massList = list(range(1500, 2200, 100))
     #massList = [1500,1600,1700,1800,1900]
     #massList = [1000,1100,1200,1300,1400]
     betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
@@ -1352,6 +1371,8 @@ if __name__ == "__main__":
     eosDirNoPrefix = eosDir[eosDir.rfind("//")+1:]
     
     quantilesExpected = [0.025, 0.16, 0.5, 0.84, 0.975]
+    if doObservedLimit == True:
+        quantilesExpected.append(-1)
     xsThFilename = "$LQANA/config/xsection_theory_13TeV_scalarPairLQ.txt"
     # xsThFilename = "$LQANA/config/xsection_theory_13TeV_stopPair.txt"
     commonCombineArgs = " --setParameters signalScaleParam={} --freezeParameters signalScaleParam --trackParameters signalScaleParam"
@@ -1674,7 +1695,7 @@ if __name__ == "__main__":
         if not os.path.isdir(separateDatacardsDir):
             print("INFO: Making directory", separateDatacardsDir, flush=True)
             Path(separateDatacardsDir).mkdir(exist_ok=True)
-        if not os.path.isdir(asimovToysDir):
+        if not os.path.isdir(asimovToysDir) and useAsimovData:
             print("INFO: Making directory", asimovToysDir, flush=True)
             Path(asimovToysDir).mkdir(exist_ok=True)
         
@@ -1787,15 +1808,19 @@ if __name__ == "__main__":
                 if not options.doBetaScan:
                     printedAsimovToyInfo = False
                     with Progress() as progress:
-                            asimovToyFile = FindAsimovToyData(mass, signalScaleFactor, asimovToysDir)
-                            if asimovToyFile is not None:
-                                if not printedAsimovToyInfo:
-                                    print("INFO: Using previously-generated Asimov toy file: {}".format(asimovToyFile), flush=True)
+                            if useAsimovData:
+                                asimovToyFile = FindAsimovToyData(mass, signalScaleFactor, asimovToysDir)
+                                if asimovToyFile is not None:
+                                    if not printedAsimovToyInfo:
+                                        print("INFO: Using previously-generated Asimov toy file: {}".format(asimovToyFile), flush=True)
+                                        printedAsimovToyInfo = True
+                                else:
+                                    print("INFO: Generating Asimov toy file", flush=True)
+                                    asimovToyFile = GenerateAsimovToyData((cardWorkspace, mass, asimovToysDir, dictAsimovToysByScaleFactor, signalScaleFactor))
                                     printedAsimovToyInfo = True
                             else:
-                                print("INFO: Generating Asimov toy file", flush=True)
-                                asimovToyFile = GenerateAsimovToyData((cardWorkspace, mass, asimovToysDir, dictAsimovToysByScaleFactor, signalScaleFactor))
-                                printedAsimovToyInfo = True
+                                print("INFO: not using Asimov toys")
+                                asimovToyFile = ""
                             if doBatch:
                                 # MakeCondorDirs(dirName)
                                 # rValuesByQuantile = rValuesByMassAndQuantile[str(mass)]
