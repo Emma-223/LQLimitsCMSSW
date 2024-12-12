@@ -65,7 +65,7 @@ def BR_Sigma_EE_vsMass(dirName=".", intLumi="35.9", mData = [], x_shademasses = 
     plotLow = 0.00001
     plotHigh = 30.
 
-    c = CMS.cmsCanvas('c', 300, 2000, plotLow, plotHigh, 'M_{LQ} (GeV)', '#sigma #times #beta^{2} (pb)', True, 0, extraSpace=0.025)
+    c = CMS.cmsCanvas('c', 300, 3000, plotLow, plotHigh, 'M_{LQ} (GeV)', '#sigma #times #beta^{2} (pb)', True, 0, extraSpace=0.025)
     # c.SetBottomMargin(0.13)
     # c.SetLeftMargin(0.14)
     c.SetRightMargin(0.06)

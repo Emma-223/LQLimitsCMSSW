@@ -103,9 +103,12 @@ def FindCardWorkspace(cardFile, mass, exceptOnAbsence=False):
         return Path(listOfWorkspaceFiles[-1]).resolve()
 
 
-def GenerateAsimovToyData(args):
-    workspace, mass, toysDir, dictAsimovToysByScaleFactor, signalScaleFactor = args
+def GenerateAsimovToyData(workspace, mass, toysDir, dictAsimovToysByScaleFactor, signalScaleFactor, expectSignal=False):
+    #workspace, mass, toysDir, dictAsimovToysByScaleFactor, signalScaleFactor = args
     cmd = 'combine -M GenerateOnly {} -t -1 --seed -1 --saveToys -n .asimov.{} -m {} {}'.format(workspace, signalScaleFactor, mass, commonCombineArgs.format(signalScaleFactor))
+    if expectSignal==True:
+        cmd += " --expectSignal 1"
+    print(cmd)
     RunCommand(cmd, toysDir, None, True)
     toyFile = Path(sorted(glob.glob(toysDir+'/higgsCombine.asimov.{}.GenerateOnly.mH{}.*.root'.format(signalScaleFactor, mass)), key=os.path.getmtime)[-1]).resolve()
     dictAsimovToysByScaleFactor[signalScaleFactor] = toyFile
@@ -184,6 +187,8 @@ def WriteCondorSubFile(condorDir, filename, shFilename, nJobs, queue="workday", 
     maxMaterialize = 1
     basename = shFilename.name.replace("condor_", "").replace(".sh", "")
     parentDir = str(shFilename.parent.resolve().name)
+    if options.doSignificance:
+        parentDir+=".significance"
     baseDir = str(Path(condorDir).parent.parent.resolve().name)
     with open(filename, "w") as subfile:
         subfile.write("executable = " + shFilename.name + "\n")
@@ -248,9 +253,9 @@ def WriteCondorShFile(condorDir, filename, mass, combineCmds=[], limitCmds=[], s
             if len(combineCmds):
                 rMin = -1
                 rMax = -1
-                if quantile != -1:
-                    rMin, rMax = GetRMinAndRMax(mass, quantile, signalScaleFactor)
-                else:
+                if quantile != -1 and not options.doSignificance:
+                   rMin, rMax = GetRMinAndRMax(mass, quantile, signalScaleFactor)
+                if quantile == -2: #Observed limit
                     rMin, rMax = GetRMinAndRMax(mass, 0.5, signalScaleFactor)
                 if rMin > 0 and rMax > 0:
                     shfile.write("if [ $1 -eq {} ]; then\n".format(jobIdx))
@@ -287,10 +292,20 @@ def WriteCondorShFile(condorDir, filename, mass, combineCmds=[], limitCmds=[], s
                     shfile.write("fi\n")
                     jobIdx += 1
                 else:
-                    if len(rootFileString):
-                        combineCmds[idx] += ' -n {}'.format(rootFileString)
-                    # print("WriteCondorShFile for mass {}: write cmd='{}'".format(mass, combineCmd))
-                    shfile.write("  {}\n".format(combineCmds[idx]))
+                    if options.doSignificance:
+                        njobs = 10
+                        for ijob in range(njobs): #10 jobs of 10000 toys each
+                            shfile.write("if [ $1 -eq {} ]; then\n".format(ijob))
+                            cmd = combineCmds[idx]
+                            cmd += ' -n .jobId{}'.format(ijob)
+                            shfile.write(cmd+"\n")
+                            shfile.write("fi\n")
+                            jobIdx+=1
+                    else:
+                        if len(rootFileString):
+                            combineCmds[idx] += ' -n {}'.format(rootFileString)
+                        # print("WriteCondorShFile for mass {}: write cmd='{}'".format(mass, combineCmd))
+                        shfile.write("  {}\n".format(combineCmds[idx]))
             if len(limitCmds) and (not len(combineCmds) or not len(combineCmds[idx])):
                 quant = "quant{}.".format(quantile) if quantile > 0 else ""
                 combinedOutputFile = "higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}gridAll.root".format(sigSFRound, mass, quant)
@@ -309,12 +324,16 @@ def GetHybridNewCommandArgs(workspace, mass, dirName, quantiles, genAsimovToyFil
     # toys = 500  # reduced for shape-based limits as test, but still took hours
     cmds = []
     for quantile in quantiles:
-        if quantile>0:
-            rMin, rMax = GetRMinAndRMax(mass, quantile, signalScaleFactor)
+        if not options.doSignificance:
+            if quantile>0:
+                rMin, rMax = GetRMinAndRMax(mass, quantile, signalScaleFactor)
+            else:
+                rMin, rMax = GetRMinAndRMax(mass, 0.5, signalScaleFactor)
+            rMin*=0.9
+            rMax*=1.1
         else:
-            rMin, rMax = GetRMinAndRMax(mass, 0.5, signalScaleFactor)
-        rMin*=0.9
-        rMax*=1.1
+            rMin = -1
+            rMax = -1
         toys = toysDefault
         if quantile == 0.025:
             toys = 40000
@@ -323,16 +342,21 @@ def GetHybridNewCommandArgs(workspace, mass, dirName, quantiles, genAsimovToyFil
         cmd = '-d {}'.format(str(workspace).split("/")[-1] if doBatch else workspace)
         cmd += ' -v1'
         cmd += ' -M HybridNew'
-        cmd += ' --LHCmode LHC-limits'
+        if options.doSignificance:
+            cmd += ' --LHCmode LHC-significance'
+        else:
+            cmd += ' --LHCmode LHC-limits'
         cmd += ' --saveHybridResult'
         cmd += ' --saveToys'
         cmd += ' --seed -1'
         if not batch:
             cmd += ' --iterations 2'
             cmd += ' --rAbsAcc {}'.format(rAbsAcc)
-        cmd += ' --clsAcc {}'.format(clsAcc)
-        cmd += ' --rMin {}'.format(rMin)
-        cmd += ' --rMax {}'.format(rMax)
+        if not options.doSignificance:
+            cmd += ' --clsAcc {}'.format(clsAcc)
+        if rMin >= 0 and rMax >= 0:
+            cmd += ' --rMin {}'.format(rMin)
+            cmd += ' --rMax {}'.format(rMax)
         cmd += ' -T {}'.format(toys)
         cmd += ' -m {}'.format(mass)
         if not batch:
@@ -459,12 +483,18 @@ def SubmitLimitJobsBatch(mass, dirName, listFailedCommands, quantiles, signalSca
     # condorSubfileDir = ""
     condorSubfileDir = condorDir + "/" + taskName
     if "gridgen" in taskName.lower():
-        condorSubfileDir = condorDir + "/gridGen/" + taskName
+        if options.doSignificance:
+            condorSubfileDir = condorDir + "/significance/" + taskName
+        else:
+            condorSubfileDir = condorDir + "/gridGen/" + taskName
         doGridGen = True
     elif "limits" in taskName.lower():
         condorSubfileDir = condorDir + "/limits/" + taskName
     elif "asymptotic" in taskName.lower():
         condorSubfileDir = condorDir + "/asymptoticLimits/" + taskName
+    elif "significance" in taskName.lower():
+        condorSubfileDir = condorDir + "/significance/" + taskName
+
     Path(condorSubfileDir).mkdir(parents=True, exist_ok=True)
     cmds = []
     if len(cmdArgs):
@@ -507,14 +537,18 @@ def SubmitHybridNewBatch(args):
         if not isinstance(quantiles, list) and quantiles > 0:
             quant = "quant{}.".format(quantiles)
         sigSFRound = round(signalScaleFactor, 6)
-        condorDir = dirName.strip("/")+"/gridGen/hybridNewGridGen.M{}{}".format(mass, quantileStr)
-        if signalScaleFactor != 1.0:
-            condorDir += '.signalScaleFactor{}'.format(sigSFRound)
-        globStrs = [str(Path(condorDir).resolve())+"/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid*.root".format(sigSFRound, mass, quant)]
-        if signalScaleFactor != 1.0:
-            globStrs.append(eosDirName.rstrip("/")+'/hybridNewGridGen.M{}{}.signalScaleFactor{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid*.root'.format(mass, quantileStr, sigSFRound, sigSFRound, mass, quant))
+        if options.doSignificance:
+            condorDir = eosDirName.rstrip("/")+"/hybridNewGridGen.M{}{}.significance".format(mass, quantileStr)
+            globStrs = [str(Path(condorDir).resolve())+"/higgsCombine.*.HybridNew.mH{}.*.root".format(mass)]
         else:
-            globStrs.append(eosDirName.rstrip("/")+'/hybridNewGridGen.M{}{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid*.root'.format(mass, quantileStr, sigSFRound, mass, quant))
+            condorDir = dirName.strip("/")+"/gridGen/hybridNewGridGen.M{}{}".format(mass, quantileStr)
+            if signalScaleFactor != 1.0:
+                condorDir += '.signalScaleFactor{}'.format(sigSFRound)
+            globStrs = [str(Path(condorDir).resolve())+"/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid*.root".format(sigSFRound, mass, quant)]
+            if signalScaleFactor != 1.0:
+                globStrs.append(eosDirName.rstrip("/")+'/hybridNewGridGen.M{}{}.signalScaleFactor{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid*.root'.format(mass, quantileStr, sigSFRound, sigSFRound, mass, quant))
+            else:
+                globStrs.append(eosDirName.rstrip("/")+'/hybridNewGridGen.M{}{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid*.root'.format(mass, quantileStr, sigSFRound, mass, quant))
         inputFiles = GetFileList(globStrs)
         # of course, now the condorDir part has to be removed
         # inputFiles = [f[f.rfind("/")+1:] for f in inputFiles]
@@ -523,7 +557,10 @@ def SubmitHybridNewBatch(args):
         limitCmd = GetComputeLimitsFromGridCommand(workspace, mass, combinedOutputFile, quantiles, sigSFRound, toyFile=genAsimovToyFile)
         if genAsimovToyFile != "":
             inputFiles.append(str(genAsimovToyFile))
-        taskName = 'hybridNewLimits.M{}{}'.format(mass, quantileStr)
+        if options.doSignificance:
+            taskName = 'hybridNewSignificance.M{}{}'.format(mass, quantileStr)
+        else:
+            taskName = 'hybridNewLimits.M{}{}'.format(mass, quantileStr)
         if signalScaleFactor != 1.0:
             taskName += '.signalScaleFactor{}'.format(round(signalScaleFactor, 6))
         if options.crabMode:
@@ -537,9 +574,11 @@ def SubmitHybridNewBatch(args):
     else:
         cmdArgs = GetHybridNewCommandArgs(workspace, mass, dirName, quantiles, genAsimovToyFile, signalScaleFactor, True)
         queue = "tomorrow"
-        if options.generateGridsOnly or gridScanPoints / gridPointsPerJob > 1:
+        if options.generateGridsOnly or gridScanPoints / gridPointsPerJob > 1 or options.doSignificance:
             taskName = 'hybridNewGridGen.M{}{}'.format(mass, quantileStr)
             limitCmds = []
+            if options.doSignificance:
+                queue = "longlunch"
         else:
             taskName = 'hybridNewGridGenAndLimits.M{}{}'.format(mass, quantileStr)
             sigSFRound = round(signalScaleFactor, 6)
@@ -616,23 +655,33 @@ def GetComputeLimitsFromGridCommand(workspace, mass, filename, quantiles, signal
         cmd += '{}'.format(str(workspace).split("/")[-1] if doBatch else workspace)
         # cmd += ' -v1'
         cmd += ' -M HybridNew'
-        cmd += ' --rMin {}'.format(rMin)
-        cmd += ' --rMax {}'.format(rMax)
-        cmd += ' --LHCmode LHC-limits'
-        cmd += ' --readHybridResults'
-        if len(filename):
-            cmd += ' --grid={}'.format(filename)
+        if options.doSignificance:
+            cmd += ' LHCmode LHC-significance'
+            if len(filename):
+                cmd += ' --toysFile={}'.format(filename)
+            else:
+                cmd += ' --toysFile={}'
         else:
-            cmd += ' --grid={}'
+            cmd += ' --rMin {}'.format(rMin)
+            cmd += ' --rMax {}'.format(rMax)
+            cmd += ' --LHCmode LHC-limits'
+            if len(filename):
+                cmd += ' --grid={}'.format(filename)
+            else:
+                cmd += ' --grid={}'
+            cmd += ' --rAbsAcc {}'.format(rAbsAcc)
+            cmd += ' --rRelAcc {}'.format(rRelAcc)
+            cmd += ' --plot={}'.format(plotFilename)
+        cmd += ' --readHybridResults'
         if quantile > 0:
             cmd += ' --expectedFromGrid {}'.format(quantile)
         if toyFile!="":
             cmd += " -D {}:toys/toy_asimov".format(str(toyFile).split("/")[-1] if doBatch else toyFile)
         cmd += ' -m {}'.format(mass)
-        cmd += ' --rAbsAcc {}'.format(rAbsAcc)
-        cmd += ' --rRelAcc {}'.format(rRelAcc)
-        cmd += ' --plot={}'.format(plotFilename)
-        if signalScaleFact != -1:
+        #cmd += ' --rAbsAcc {}'.format(rAbsAcc)
+        #cmd += ' --rRelAcc {}'.format(rRelAcc)
+        #cmd += ' --plot={}'.format(plotFilename)
+        if signalScaleFact != -1 and not options.doSignificance:
             cmd += ' -n .signalScaleFactor{}'.format(signalScaleFact)
         cmd += commonCombineArgs.format(signalScaleFact)
         cmds.append(cmd)
@@ -1314,23 +1363,49 @@ def MakeImpacts(workspace, mass, dirName, signalScaleFactor):
         print("INFO: Making directory", impactsDir, flush=True)
         Path(impactsDir).mkdir()
     with Progress() as progress:
-        task_id = progress.add_task("[cyan]Making impact plots for LQ{}".format(mass), total=4)
-        combToolCmd = "combineTool.py"
-        cmd = combToolCmd + " -M Impacts -d {} -m {} --doInitialFit --robustFit 1".format(workspace, mass)
+        #signalScaleFactor = signalScaleFactor * 10
+        if signalScaleFactor <=1.0:
+            signalScaleFactor = 1.0
+        task_id = progress.add_task("[cyan]Making impact plots for LQ{}".format(mass), total=5)
+        rMin = -1
+        if mass==3000:
+            rMin = -10
+            #signalScaleFactor *= 3
+        rMax = 5
+        print("INFO: Use rMin = {}".format(rMin))
+        stepSize = 0.2
+        combToolCmd = "combineTool.py -v2"
+        cmd = combToolCmd + " -M Impacts -d {} -m {} --doInitialFit --robustFit 1 --rMin {}".format(workspace, mass, rMin, rMax)
         cmd += commonCombineArgs.format(signalScaleFactor)
         RunCommand(cmd, impactsDir, None, True)
+        if os.path.isfile(impactsDir+"/combine_logger.out"):
+            shutil.copy(impactsDir+"/combine_logger.out", impactsDir+"/combine_logger_initialFit{}.out".format(mass))
         progress.update(task_id, advance=1)
-        cmd = combToolCmd + " -M Impacts -d {} -m {} --robustFit 1 --doFits --parallel 4".format(workspace, mass)
+        cmd = combToolCmd + " -M Impacts -d {} -m {} --robustFit 1 --doFits --parallel 4 --rMin {}".format(workspace, mass, rMin, rMax)
         cmd += commonCombineArgs.format(signalScaleFactor)
         RunCommand(cmd, impactsDir, None, True)
+        if os.path.isfile(impactsDir+"/combine_logger.out"):
+            shutil.copy(impactsDir+"/combine_logger.out", impactsDir+"/combine_logger_doFits{}.out".format(mass))
         progress.update(task_id, advance=1)
-        cmd = combToolCmd + " -M Impacts -d {} -m {} -o impacts.m{}.json".format(workspace, mass, mass)
+        cmd = combToolCmd + " -M Impacts -d {} -m {} -o impacts.m{}.json --rMin {}".format(workspace, mass, mass, rMin)
         cmd += commonCombineArgs.format(signalScaleFactor)
         RunCommand(cmd, impactsDir, None, True)
+        if os.path.isfile(impactsDir+"/combine_logger.out"):
+            shutil.copy(impactsDir+"/combine_logger.out", impactsDir+"/combine_logger_makeJson{}.out".format(mass))
         progress.update(task_id, advance=1)
         cmd = "plotImpacts.py --summary -i impacts.m{}.json -o impacts.m{}".format(mass, mass)
         RunCommand(cmd, impactsDir, None, True)
         progress.update(task_id, advance=1)
+
+        cmd = "combine -M MultiDimFit {} --algo grid --saveFitResult --rMin {} --points=1000 --mass {} -v2".format(workspace, rMin, mass)
+        cmd += commonCombineArgs.format(signalScaleFactor)
+        RunCommand(cmd, impactsDir, None, True)
+
+        cmd = "/afs/cern.ch/user/e/eipearso/public/leptoquark_analysis/CMSSW_14_1_0_pre4/src/HiggsAnalysis/CombinedLimit/scripts/plot1DScan.py higgsCombineTest.MultiDimFit.mH{}.root -o likelihoodScan_LQ{}".format(mass,mass)
+        RunCommand(cmd, impactsDir, None, True)
+        progress.update(task_id, advance=1)
+        if os.path.isfile(impactsDir+"/combine_logger.out"):
+            shutil.copy(impactsDir+"/combine_logger.out", impactsDir+"/combine_logger_likelihoodScan{}.out".format(mass))
 
     
 # https://twiki.cern.ch/twiki/bin/viewauth/CMS/HiggsWG/HiggsPAGPreapprovalChecks
@@ -1359,20 +1434,21 @@ if __name__ == "__main__":
     doShapeBasedLimits = False
     doAsymptoticLimits = False
     blinded = True
-    doObservedLimit = True
+    doObservedLimit = False
     useAsimovData = True #do or don't use asimov data in place of real data
     #NOTE: if doObservedLimit==True and useAsimovData==True, combine will calculate the observed limit using asimov toys in place of real data
     ncores = 6
-    massList = list(range(1500, 2200, 100))
-    #massList = [1500,1600,1700,1800,1900]
-    #massList = [1000,1100,1200,1300,1400]
+    #massList = list(range(300, 2200, 100))
+    #massList = list(range(2200,3100, 100))
+    massList = [1500]#,1100,1200,1300,1400]
     betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
     eosDir = "root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso"
     eosDirNoPrefix = eosDir[eosDir.rfind("//")+1:]
     
-    quantilesExpected = [0.025, 0.16, 0.5, 0.84, 0.975]
+    #quantilesExpected = [0.025, 0.16, 0.5, 0.84, 0.975]
+    quantilesExpected = [0.5]
     if doObservedLimit == True:
-        quantilesExpected.append(-1)
+        quantilesExpected.append(-2)
     xsThFilename = "$LQANA/config/xsection_theory_13TeV_scalarPairLQ.txt"
     # xsThFilename = "$LQANA/config/xsection_theory_13TeV_stopPair.txt"
     commonCombineArgs = " --setParameters signalScaleParam={} --freezeParameters signalScaleParam --trackParameters signalScaleParam"
@@ -1506,6 +1582,14 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
     )
+    parser.add_option(
+        "--signif",
+        dest="doSignificance",
+        help="do significance calculation",
+        metavar="doSignificance",
+        action="store_true",
+        default=False,
+    )
     (options, args) = parser.parse_args()
     if options.datacard is None and options.readResults is None:
         raise RuntimeError("Need either option d to specify datacard, or option r to specify reading limit results from batch")
@@ -1553,6 +1637,38 @@ if __name__ == "__main__":
             cardWorkspace = FindCardWorkspace(datacardDir + "/*", mass)
             DoPreapprovalChecks(cardWorkspace, mass, dirName, signalScaleFactorsByMassAndQuantile[str(mass)][str(quantilesExpected[0])])
         print("DONE", flush=True)
+
+    elif options.doSignificance:
+        signalScaleFactor = 1.0
+        if not options.readResults:
+            separateDatacardsDir = dirName+"/datacards"
+            asimovToysDir = dirName + "/asimovDataWithSignal"
+            if not os.path.isdir(dirName):
+                print("INFO: Making directory",dirName,flush=True)
+                Path(dirName).mkdir(exist_ok=True)
+            if not os.path.isdir(separateDatacardsDir):
+                print("INFO: Making directory",separateDatacardsDir,flush=True)
+                Path(separateDatacardsDir).mkdir(exist_ok=True)
+            if not os.path.isdir(asimovToysDir):
+                print("INFO: Making directory",asimovToysDir,flush=True)
+                Path(asimovToysDir).mkdir(exist_ok=True)
+            massListFromCards, cardFilesByMass, _ = SeparateDatacards(combinedDatacard, 0, separateDatacardsDir)
+            for mass in massList:
+                cardFile = cardFilesByMass[mass]
+                cardWorkspace = FindCardWorkspace(cardFile, mass)
+                if cardWorkspace is not None:
+                    print("INFO: Using previously-generated card workspace: {}".format(cardWorkspace), flush=True)
+                else:
+                    cardWorkspace = ConvertDatacardToWorkspace(cardFile, mass)
+                
+                asimovToyFile = FindAsimovToyData(mass, signalScaleFactor, asimovToysDir)
+                if asimovToyFile is not None:
+                    print("INFO: Using previously-generated Asimov toy file: {}".format(asimovToyFile), flush=True)
+                else:
+                    print("INFO: Generating Asimov toy file", flush=True)
+                    asimovToyFile = GenerateAsimovToyData(cardWorkspace, mass, asimovToysDir, dictAsimovToysByScaleFactor, signalScaleFactor, True)
+                print("Submitting HybridNew jobs to batch for mass {}...".format(mass))
+                SubmitHybridNewBatch((cardWorkspace, mass, dirName, listFailedCommands, 0.5, asimovToyFile, signalScaleFactor)) 
 
     elif options.readResults and options.estimateRValueScanRange:
         if not options.doBetaScan:
@@ -1816,7 +1932,7 @@ if __name__ == "__main__":
                                         printedAsimovToyInfo = True
                                 else:
                                     print("INFO: Generating Asimov toy file", flush=True)
-                                    asimovToyFile = GenerateAsimovToyData((cardWorkspace, mass, asimovToysDir, dictAsimovToysByScaleFactor, signalScaleFactor))
+                                    asimovToyFile = GenerateAsimovToyData(cardWorkspace, mass, asimovToysDir, dictAsimovToysByScaleFactor, signalScaleFactor)
                                     printedAsimovToyInfo = True
                             else:
                                 print("INFO: not using Asimov toys")
