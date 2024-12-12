@@ -65,7 +65,7 @@ def BR_Sigma_EE_vsMass(dirName=".", intLumi="35.9", mData = [], x_shademasses = 
     plotLow = 0.00001
     plotHigh = 30.
 
-    c = CMS.cmsCanvas('c', 300, 2000, plotLow, plotHigh, 'M_{LQ} (GeV)', '#sigma #times #beta^{2} (pb)', True, 0, extraSpace=0.025)
+    c = CMS.cmsCanvas('c', 300, 3000, plotLow, plotHigh, 'M_{LQ} (GeV)', '#sigma #times #beta^{2} (pb)', True, 0, extraSpace=0.025)
     # c.SetBottomMargin(0.13)
     # c.SetLeftMargin(0.14)
     c.SetRightMargin(0.06)
@@ -129,7 +129,7 @@ def BR_Sigma_EE_vsMass(dirName=".", intLumi="35.9", mData = [], x_shademasses = 
     xsTh_logY = []
     if doObserved:
         for ii in range(0, massPoints):
-            xsUp_observed_logY[ii] = math.log(xsUp_observed[ii])
+            xsUp_observed_logY.append(math.log(xsUp_observed[ii]))
         xsData_vs_m_observed_log = TGraph(massPoints, numpy.array(mData, dtype="f"), numpy.array(xsUp_observed_logY, dtype="f"))
     for ii in range(0, massPoints):
         xsUp_expected_logY.append(math.log(xsUp_expected[ii]))
