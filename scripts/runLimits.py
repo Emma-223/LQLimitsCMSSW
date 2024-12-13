@@ -656,11 +656,12 @@ def GetComputeLimitsFromGridCommand(workspace, mass, filename, quantiles, signal
         # cmd += ' -v1'
         cmd += ' -M HybridNew'
         if options.doSignificance:
-            cmd += ' LHCmode LHC-significance'
+            cmd += ' --LHCmode LHC-significance'
             if len(filename):
                 cmd += ' --toysFile={}'.format(filename)
             else:
                 cmd += ' --toysFile={}'
+            cmd += ' --readHybridResult'
         else:
             cmd += ' --rMin {}'.format(rMin)
             cmd += ' --rMax {}'.format(rMax)
@@ -672,9 +673,9 @@ def GetComputeLimitsFromGridCommand(workspace, mass, filename, quantiles, signal
             cmd += ' --rAbsAcc {}'.format(rAbsAcc)
             cmd += ' --rRelAcc {}'.format(rRelAcc)
             cmd += ' --plot={}'.format(plotFilename)
-        cmd += ' --readHybridResults'
+            cmd += ' --readHybridResults'
         if quantile > 0:
-            cmd += ' --expectedFromGrid {}'.format(quantile)
+            cmd += ' --expectedFromGrid={}'.format(quantile)
         if toyFile!="":
             cmd += " -D {}:toys/toy_asimov".format(str(toyFile).split("/")[-1] if doBatch else toyFile)
         cmd += ' -m {}'.format(mass)
