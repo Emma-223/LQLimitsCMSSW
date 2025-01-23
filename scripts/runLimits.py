@@ -108,7 +108,6 @@ def GenerateAsimovToyData(workspace, mass, toysDir, dictAsimovToysByScaleFactor,
     cmd = 'combine -M GenerateOnly {} -t -1 --seed -1 --saveToys -n .asimov.{} -m {} {}'.format(workspace, signalScaleFactor, mass, commonCombineArgs.format(signalScaleFactor))
     if expectSignal==True:
         cmd += " --expectSignal 1"
-    print(cmd)
     RunCommand(cmd, toysDir, None, True)
     toyFile = Path(sorted(glob.glob(toysDir+'/higgsCombine.asimov.{}.GenerateOnly.mH{}.*.root'.format(signalScaleFactor, mass)), key=os.path.getmtime)[-1]).resolve()
     dictAsimovToysByScaleFactor[signalScaleFactor] = toyFile
@@ -166,6 +165,12 @@ def GetFileListMultiple(globStringList):
         raise RuntimeError("Globbing for {} did not result in any files; using globString={}, result is {}".format(globStringList, globString, fileList))
     return fileList
 
+def GetFilesInDirXrd(dirName):
+    eosPathNoUrl = "/"+dirName.split("//")[-1]
+    cmd = ["xrdfs","root://eoscms.cern.ch","ls","{}".format(eosPathNoUrl)] #returns an error if dir does not exist. Does not support wildcards.
+    lsOutput = subprocess.check_output(cmd).decode('ASCII')
+    fileList = lsOutput.split('\n')
+    return fileList
 
 def MakeCondorDirs(dirName):
     condorDir = dirName.strip("/")+"/condor"
@@ -179,39 +184,81 @@ def MakeCondorDirs(dirName):
             print("INFO: Making directory", idir, flush=True)
             Path(idir).mkdir(exist_ok=True)
 
+def GetFilenamesFromCondorOutFiles(dirName, nFilesExpected=1):
+    condorOutFileList = GetFileList(dirName+"/condor.*.out")
+    eosFileList = []
+    filesMissingOutput = []
+    for file in condorOutFileList:
+        foundOutput = False
+        with open(file,'r') as f:
+            lines = f.readlines()
+        for i in range(1,len(lines)):
+            l = lines[len(lines)-i] #We expect it to be the last line, so start from the end
+            if "output eos file" in l.lower():
+                eosFileList.append("root://eoscms.cern.ch/"+l.split()[-1])
+                foundOutput = True
+                break
+        if not foundOutput:
+            filesMissingOutput.append(file)
+    if len(filesMissingOutput):
+        print("The following condor*.out files are missing the eos output file path: ",filesMissingOutput)
+        raise RuntimeError("Can't find eos files in all condor*.out files")
+    if len(eosFileList) < nFilesExpected:
+        raise RuntimeError("Expected {} eos files, found {}".format(nFilesExpected, len(eosFileList)))
+    if nFilesExpected > 1:
+        return eosFileList
+    else:
+        return eosFileList[0]
 
 def WriteCondorSubFile(condorDir, filename, shFilename, nJobs, queue="workday", doGridGen=True, extractLimits=False, inputFiles=[]):
     # scanJobs = 1
     # if doGridGen:
     #     scanJobs = gridScanPoints / gridPointsPerJob
     maxMaterialize = 1
-    basename = shFilename.name.replace("condor_", "").replace(".sh", "")
+    if options.cmsConnectMode:
+        basename = str(shFilename).replace("condor_", "").replace(".sh", "")
+    else:
+        basename = shFilename.name.replace("condor_", "").replace(".sh", "")
     parentDir = str(shFilename.parent.resolve().name)
     if options.doSignificance:
         parentDir+=".significance"
     baseDir = str(Path(condorDir).parent.parent.resolve().name)
     with open(filename, "w") as subfile:
-        subfile.write("executable = " + shFilename.name + "\n")
+        if options.cmsConnectMode:
+            subfile.write("Universe = vanilla\n")
+            subfile.write("executable = " + str(shFilename) + "\n")
+        else:
+            subfile.write("executable = " + shFilename.name + "\n")
         subfile.write("arguments = $(ProcId)\n")
         subfile.write("output                = " + basename + ".$(ClusterId).$(ProcId).out\n")
         subfile.write("error                 = " + basename + ".$(ClusterId).$(ProcId).err\n")
         subfile.write("log                   = " + basename + ".$(ClusterId).$(ProcId).log\n")
+        if options.cmsConnectMode:
+            subfile.write('+REQUIRED_OS = "rhel9"\n')
         subfile.write("\n")
-        if len(inputFiles):
+        if options.cmsConnectMode:
+            fullPathInputFiles = [
+                options.cmsswSandbox,
+                "/home/emma-pearson/cmssw_setup_copyForDebug.sh",
+            ]
+        else:
             fullPathInputFiles = []
+        if len(inputFiles):
             for thisFile in inputFiles:
                 if thisFile.startswith("/eos"):
                     thisFile = GetEOSPathWithFullURL(thisFile)
                 fullPathInputFiles.append(thisFile)
+        if len(fullPathInputFiles):
             subfile.write("transfer_input_files = {}\n".format(",".join(fullPathInputFiles)))
             subfile.write("\n")
         # subfile.write('transfer_output_remaps = "combine_logger.out=out/' + basename + '.$(ClusterId).$(ProcId).combine_logger.out"\n')
         subfile.write("\n")
         subfile.write("should_transfer_files = YES\n")
-        subfile.write("when_to_transfer_output = ON_EXIT\n")
-        subfile.write("output_destination = "+eosDir+"/"+baseDir+"/"+parentDir+"/\n")
-        subfile.write("MY.XRDCP_CREATE_DIR = True\n")
-        subfile.write("\n")
+        if not options.cmsConnectMode:
+            subfile.write("when_to_transfer_output = ON_EXIT\n")
+            subfile.write("output_destination = "+eosDir+"/"+baseDir+"/"+parentDir+"/\n")
+            subfile.write("MY.XRDCP_CREATE_DIR = True\n")
+            subfile.write("\n")
         subfile.write("# Send the job to Held state on failure.\n")
         subfile.write("on_exit_hold = (ExitBySignal == True) || (ExitCode != 0)\n")
         subfile.write("\n")
@@ -220,8 +267,9 @@ def WriteCondorSubFile(condorDir, filename, shFilename, nJobs, queue="workday", 
         subfile.write("\n")
         # if doGridGen:
         #     subfile.write("max_materialize={}\n".format(maxMaterialize))
-        subfile.write("+JobFlavour=\"{}\"\n".format(queue))
-        subfile.write("MY.WantOS = \"el9\"\n")
+        if not options.cmsConnectMode:
+            subfile.write("+JobFlavour=\"{}\"\n".format(queue))
+            subfile.write("MY.WantOS = \"el9\"\n")
         # subfile.write("queue {}\n".format(int(scanJobs)))
         subfile.write("queue {}\n".format(nJobs))
 
@@ -235,9 +283,20 @@ def WriteCondorShFile(condorDir, filename, mass, combineCmds=[], limitCmds=[], s
         shfile.write("ulimit -s unlimited\n")
         shfile.write("set -e\n")
         if options.cmsConnectMode:
-            shfile.write("source cmssw_setup.sh\n")
+            shfile.write("condorNodeBaseDir=$PWD\n")
+            shfile.write("source ./cmssw_setup_copyForDebug.sh\n")
+            shfile.write("export VO_CMS_SW_DIR=/cvmfs/cms.cern.ch\n")
+            shfile.write("source $VO_CMS_SW_DIR/cmsset_default.sh\n")
             sandbox = Path(options.cmsswSandbox).resolve().name
             shfile.write("cmssw_setup {}\n".format(sandbox))
+            shfile.write("cd $CMSSW_BASE\n")
+            for i,c in enumerate(combineCmds):
+                c = c.replace("./combine","combine")
+                combineCmds[i] = c
+            for i,c in enumerate(limitCmds):
+                c = c.replace("./combine","combine")
+                limitCmds[i] = c
+
         else:
             shfile.write("cd {}\n".format(condorDir))
             shfile.write("source /cvmfs/cms.cern.ch/cmsset_default.sh\n")
@@ -247,7 +306,7 @@ def WriteCondorShFile(condorDir, filename, mass, combineCmds=[], limitCmds=[], s
         rootFileString = ""
         sigSFRound = round(signalScaleFactor, 6)
         if betaIndex != -1:
-            rootFileString = "betaIndex"+str(betaIndex)
+            rootFileString = ".betaIndex"+str(betaIndex)
         combinedOutputFiles = []
         for idx, quantile in enumerate(quantiles):
             if len(combineCmds):
@@ -263,7 +322,7 @@ def WriteCondorShFile(condorDir, filename, mass, combineCmds=[], limitCmds=[], s
                         pointsPerJob = gridPointsPerJobLowQuantiles
                     else:
                         pointsPerJob = gridPointsPerJob
-                    print("Info: using {} grid points per job for quantile {}".format(pointsPerJob, quantile))
+                    #print("Info: using {} grid points per job for quantile {}".format(pointsPerJob, quantile))
                     stepSize = (rMax-rMin)/gridScanPoints
                     if gridScanPoints < pointsPerJob:
                         pointsPerJob = gridScanPoints
@@ -308,10 +367,52 @@ def WriteCondorShFile(condorDir, filename, mass, combineCmds=[], limitCmds=[], s
                         shfile.write("  {}\n".format(combineCmds[idx]))
             if len(limitCmds) and (not len(combineCmds) or not len(combineCmds[idx])):
                 quant = "quant{}.".format(quantile) if quantile > 0 else ""
+                if options.cmsConnectMode:
+                    nFiles = int(math.ceil(gridScanPoints/gridPointsPerJob))
+                    #filenameBase = eosDir+"/"+options.name+"/hybridNewGridGen.M{}.{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid{}.root"
+                    #filesToCheck = []
+                    #for i in range(nFiles):
+                    #    f = filenameBase.format(mass,str(quantile).replace(".","p"),sigSFRound,mass,quant,i)
+                    #    shfile.write("xrdcp -fs {} {}\n".format(f, f.split("/")[-1]))
+                    #    filesToCheck.append(f)
+                    gridGenCondorDir = options.name+"/gridGen/hybridNewGridGen.M{}.{}/signalScaleFactor{}".format(mass,str(quantile).replace(".","p"),sigSFRound)
+                    eosFileList = GetFilenamesFromCondorOutFiles(gridGenCondorDir,nFiles)
+                    for f in eosFileList:
+                        shfile.write("xrdcp -fs {} {}\n".format(f, f.split("/")[-1]))
+
                 combinedOutputFile = "higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}gridAll.root".format(sigSFRound, mass, quant)
                 shfile.write("hadd -fk207 {} higgsCombine.*.root\n".format(combinedOutputFile))
                 shfile.write(limitCmds[idx].format(combinedOutputFile)+"\n")
                 combinedOutputFiles.append(combinedOutputFile)
+        if options.cmsConnectMode:
+            shfile.write("\n")
+            parentDir = str(Path(filename).parent.resolve().name)
+            baseDir = str(Path(filename).parent.parent.resolve().name)
+            eosPath = eosDir+"/"+options.name+"/"+baseDir#+"/"+parentDir
+            if len(limitCmds):
+                if "0.5" in quant:
+                    quantWithTrailing0s = quant.replace('0.5','0.500')
+                elif "0.16" in quant:
+                    quantWithTrailing0s = quant.replace('0.16','0.160')
+                elif "0.84" in quant:
+                    quantWithTrailing0s = quant.replace('0.16','0.840')
+                else:
+                    quantWithTrailing0s = quant
+                files = [
+                    "higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}gridAll.root".format(sigSFRound, mass, quant),
+                    "higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}root".format(sigSFRound, mass, quantWithTrailing0s),
+                    "limit_scan_signalScaleFactor{}_m{}_{}pdf".format(sigSFRound, mass, quant),
+                ]
+                for f in files:
+                    shfile.write("xrdcp -fs {} {}/{}\n".format(f,eosPath,f))
+                shfile.write("outputEOSFile=$(xrdfs root://eoscms.cern.ch ls /{}/{})\n".format(eosPath.split("//")[-1],files[1]))
+                shfile.write('echo "output eos file: $outputEOSFile "')
+            else:
+                shfile.write("ls higgsCombine*.root\n")
+                shfile.write("outputRootFile=$(ls higgsCombine*.root)\n")
+                shfile.write("xrdcp -fs $outputRootFile {}/$outputRootFile\n".format(eosPath))
+                shfile.write("outputEOSFile=$(xrdfs root://eoscms.cern.ch ls /{}/$outputRootFile)\n".format(eosPath.split("//")[-1]))
+                shfile.write('echo "output eos file: $outputEOSFile "')
     return combinedOutputFiles, jobIdx if jobIdx > 0 else 1
 
 
@@ -339,7 +440,10 @@ def GetHybridNewCommandArgs(workspace, mass, dirName, quantiles, genAsimovToyFil
             toys = 40000
         elif quantile == 0.16:
             toys = 30000
-        cmd = '-d {}'.format(str(workspace).split("/")[-1] if doBatch else workspace)
+        if options.cmsConnectMode:
+            cmd = '-d $condorNodeBaseDir/{}'.format(str(workspace).split("/")[-1])
+        else:
+            cmd = '-d {}'.format(str(workspace).split("/")[-1] if doBatch else workspace)
         cmd += ' -v1'
         cmd += ' -M HybridNew'
         if options.doSignificance:
@@ -366,9 +470,12 @@ def GetHybridNewCommandArgs(workspace, mass, dirName, quantiles, genAsimovToyFil
         cmd += commonCombineArgs.format(signalScaleFactor)
         if quantile > 0:
             cmd += ' --expectedFromGrid {}'.format(quantile)
-            print("INFO: Run with --expectedFromGrid {}".format(quantile))
+            #print("INFO: Run with --expectedFromGrid {}".format(quantile))
         if genAsimovToyFile != "":
-            cmd += ' -D {}:toys/toy_asimov'.format(str(genAsimovToyFile).split("/")[-1] if doBatch else genAsimovToyFile)
+            if options.cmsConnectMode:
+                cmd += ' -D $condorNodeBaseDir/{}:toys/toy_asimov'.format(str(genAsimovToyFile).split("/")[-1])
+            else:
+                cmd += ' -D {}:toys/toy_asimov'.format(str(genAsimovToyFile).split("/")[-1] if doBatch else genAsimovToyFile)
             if quantile < 0:
                 print("INFO: Found quantile {}: Running observed limit with Asimov toys".format(quantile))
         cmds.append(cmd)
@@ -414,14 +521,17 @@ def GetRMinAndRMax(mass, quantileExp, signalScaleFactor=1.0):
         else:
             rMax = rValuesAtBeta[str(beta)][str(quantileExp)]*1.3
             rMin = rValuesAtBeta[str(beta)][str(quantileExp)]*0.75
-    print("rValue range for quantile {}, mass {} = {} - {}".format(quantileExp, mass, rMin, rMax))
+    #print("rValue range for quantile {}, mass {} = {} - {}".format(quantileExp, mass, rMin, rMax))
     return rMin, rMax
 
 
 def GetAsymptoticCommandArgs(workspace, mass, dirName, blinded, signalScaleFactor, rMin, rMax):
     rAbsAcc = 0.0001
     # rMax = 150
-    cmd = ' {}'.format(str(workspace).split("/")[-1] if doBatch else workspace)
+    if options.cmsConnectMode:
+        cmd = ' $condorNodeBaseDir/{}'.format(str(workspace).split("/")[-1])
+    else:
+        cmd = ' {}'.format(str(workspace).split("/")[-1] if doBatch else workspace)
     cmd += ' -v1'
     cmd += ' -M AsymptoticLimits'
     cmd += ' --seed -1'
@@ -495,6 +605,8 @@ def SubmitLimitJobsBatch(mass, dirName, listFailedCommands, quantiles, signalSca
     elif "significance" in taskName.lower():
         condorSubfileDir = condorDir + "/significance/" + taskName
 
+    if options.doBetaScan:
+        condorSubfileDir = condorSubfileDir.replace(".signalScaleFactor","/signalScaleFactor")
     Path(condorSubfileDir).mkdir(parents=True, exist_ok=True)
     cmds = []
     if len(cmdArgs):
@@ -523,12 +635,12 @@ def SubmitLimitJobsBatch(mass, dirName, listFailedCommands, quantiles, signalSca
         if trial >= maxTries:
             listFailedCommands.append(" ".join(runCommandArgs[0:1]))
             return " ".join(runCommandArgs[0:1])
-    else:
-        print("INFO: dry run enabled; not submitting {} to condor".format(str(Path(condorFile))))
+    #else:
+     #   print("INFO: dry run enabled; not submitting {} to condor".format(str(Path(condorFile))))
 
 
 def SubmitHybridNewBatch(args):
-    workspace, mass, dirName, listFailedCommands, quantiles, genAsimovToyFile, signalScaleFactor = args
+    workspace, mass, dirName, listFailedCommands, quantiles, genAsimovToyFile, signalScaleFactor, inputFileList = args
     quantileStr = "."+str(quantiles).replace(".", "p") if not isinstance(quantiles, list) else ""
     if options.submitLimitJobsAfterGridGen:
         queue = "longlunch"
@@ -537,19 +649,32 @@ def SubmitHybridNewBatch(args):
         if not isinstance(quantiles, list) and quantiles > 0:
             quant = "quant{}.".format(quantiles)
         sigSFRound = round(signalScaleFactor, 6)
-        if options.doSignificance:
-            condorDir = eosDirName.rstrip("/")+"/hybridNewGridGen.M{}{}.significance".format(mass, quantileStr)
-            globStrs = [str(Path(condorDir).resolve())+"/higgsCombine.*.HybridNew.mH{}.*.root".format(mass)]
+        if options.cmsConnectMode:
+            inputFiles = []
+            baseDirName = eosDirName.rstrip("/")+'/hybridNewGridGen.M{}{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid{}.root'
+            nFiles = int(math.ceil(gridScanPoints/gridPointsPerJob))
+            for i in range(nFiles):
+                f = baseDirName.format(mass,quantileStr,sigSFRound,mass,quant,i)
+                missingFiles = []
+                if not f.split("//")[-1] in inputFileList:
+                    missingFiles.append(f)
+            if len(missingFiles):
+                print("did not find files: ",missingFiles)
+                raise RuntimeError("Some input files are missing")
         else:
-            condorDir = dirName.strip("/")+"/gridGen/hybridNewGridGen.M{}{}".format(mass, quantileStr)
-            if signalScaleFactor != 1.0:
-                condorDir += '.signalScaleFactor{}'.format(sigSFRound)
-            globStrs = [str(Path(condorDir).resolve())+"/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid*.root".format(sigSFRound, mass, quant)]
-            if signalScaleFactor != 1.0:
-                globStrs.append(eosDirName.rstrip("/")+'/hybridNewGridGen.M{}{}.signalScaleFactor{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid*.root'.format(mass, quantileStr, sigSFRound, sigSFRound, mass, quant))
+            if options.doSignificance:
+                condorDir = eosDirName.rstrip("/")+"/hybridNewGridGen.M{}{}.significance".format(mass, quantileStr)
+                globStrs = [str(Path(condorDir).resolve())+"/higgsCombine.*.HybridNew.mH{}.*.root".format(mass)]
             else:
-                globStrs.append(eosDirName.rstrip("/")+'/hybridNewGridGen.M{}{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid*.root'.format(mass, quantileStr, sigSFRound, mass, quant))
-        inputFiles = GetFileList(globStrs)
+                condorDir = dirName.strip("/")+"/gridGen/hybridNewGridGen.M{}{}".format(mass, quantileStr)
+                if signalScaleFactor != 1.0:
+                    condorDir += '.signalScaleFactor{}'.format(sigSFRound)
+                globStrs = [str(Path(condorDir).resolve())+"/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid*.root".format(sigSFRound, mass, quant)]
+                if signalScaleFactor != 1.0:
+                    globStrs.append(eosDirName.rstrip("/")+'/hybridNewGridGen.M{}{}.signalScaleFactor{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid*.root'.format(mass, quantileStr, sigSFRound, sigSFRound, mass, quant))
+                else:
+                    globStrs.append(eosDirName.rstrip("/")+'/hybridNewGridGen.M{}{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}grid*.root'.format(mass, quantileStr, sigSFRound, mass, quant))
+            inputFiles = GetFileList(globStrs)
         # of course, now the condorDir part has to be removed
         # inputFiles = [f[f.rfind("/")+1:] for f in inputFiles]
         inputFiles.append(str(workspace))
@@ -652,7 +777,10 @@ def GetComputeLimitsFromGridCommand(workspace, mass, filename, quantiles, signal
         #     rMin, rMax = GetRMinAndRMax(mass, quantile, signalScaleFact)
         plotFilename = "limit_scan_{}m{}_quant{}.pdf".format("signalScaleFactor"+str(signalScaleFact)+"_" if signalScaleFact != -1 else "", mass, quantile)
         cmd = './combine ' if doBatch else 'combine '
-        cmd += '{}'.format(str(workspace).split("/")[-1] if doBatch else workspace)
+        if options.cmsConnectMode:
+            cmd += ' $condorNodeBaseDir/{}'.format(str(workspace).split("/")[-1])
+        else:
+            cmd += '{}'.format(str(workspace).split("/")[-1] if doBatch else workspace)
         # cmd += ' -v1'
         cmd += ' -M HybridNew'
         if options.doSignificance:
@@ -677,7 +805,10 @@ def GetComputeLimitsFromGridCommand(workspace, mass, filename, quantiles, signal
         if quantile > 0:
             cmd += ' --expectedFromGrid={}'.format(quantile)
         if toyFile!="":
-            cmd += " -D {}:toys/toy_asimov".format(str(toyFile).split("/")[-1] if doBatch else toyFile)
+            if options.cmsConnectMode:
+                cmd += " -D $condorNodeBaseDir/{}:toys/toy_asimov".format(str(toyFile).split("/")[-1])
+            else:
+                cmd += " -D {}:toys/toy_asimov".format(str(toyFile).split("/")[-1] if doBatch else toyFile)
         cmd += ' -m {}'.format(mass)
         #cmd += ' --rAbsAcc {}'.format(rAbsAcc)
         #cmd += ' --rRelAcc {}'.format(rRelAcc)
@@ -701,7 +832,7 @@ def ComputeLimitsFromGrid(workspace, mass, dirName, filename, quantile, signalSc
 def ExtractLimitResult(rootFile):
     # higgsCombineTest.MethodName.mH$MASS.[word$WORD].root
     # higgsCombineTest.HybridNew.mH120.quant0.500.root
-    if not os.path.isfile(rootFile):
+    if not os.path.isfile(rootFile) and not options.cmsConnectMode:
         raise RuntimeError("ERROR: Did not find the root file {}. Exiting.".format(rootFile))
     tfile = TFile.Open(str(rootFile))
     limitTree = tfile.Get("limit")
@@ -843,9 +974,9 @@ def CreateArraysForPlotting(xsecLimitsByMassAndQuantile):
 
 def GetBetaRangeToAttempt(mass):
     # get a restricted beta range to test for each mass point
-    minBetasPerMass = {300: 0,   400: 0,   500: 0.025, 600: 0.035, 700: 0.045, 800: 0.055, 900: 0.065, 1000: 0.075,  1100: 0.085, 1200: 0.095, 1300: 0.105, 1400: 0.115, 1500: 0.125}
-    maxBetasPerMass = {300: 0.075, 400: 0.1, 500: 0.15, 600: 0.2, 700: 0.25, 800: 0.35, 900: 0.45, 1000: 0.6, 1100: 0.7, 1200: 0.8, 1300: 0.9, 1400: 1.0, 1500: 1.0}
-    if mass > 1500:
+    minBetasPerMass = {300: 0,   400: 0,   500: 0.025, 600: 0.035, 700: 0.045, 800: 0.055, 900: 0.065, 1000: 0.075,  1100: 0.085, 1200: 0.095, 1300: 0.105, 1400: 0.115, 1500: 0.125, 1600: 0.125, 1700: 0.65}
+    maxBetasPerMass = {300: 0.075, 400: 0.1, 500: 0.15, 600: 0.2, 700: 0.25, 800: 0.35, 900: 0.45, 1000: 0.6, 1100: 0.7, 1200: 0.8, 1300: 0.9, 1400: 1.0, 1500: 1.0, 1600: 1.0, 1700: 1.0}
+    if mass > 1700:
         return 0.9, 1.0
     else:
         return minBetasPerMass[mass], maxBetasPerMass[mass]
@@ -860,11 +991,17 @@ def GetBetasToSubmit(mass):
 
 
 def CheckErrorFile(errFileName, throwException=True):
-    # print("\tChecking error file {}...".format(errFileName), end = "", flush=True)
+    print("\tChecking error file {}...".format(errFileName), end = "", flush=True)
     messagesToIgnore = ["[WARNING] Minimization finished with status 1 (covariance matrix forced positive definite), this could indicate a problem with the minimum!"]
     messagesToIgnore.append("Info in <TCanvas::Print>: pdf file limit_scan")
-    typesOfIgnoredMessages = ["minimization status 1 warning", "limit scan pdf created"]
-    showIgnoreMessages = [True, False]
+    messagesToIgnore.append("WARNING: Environment variable XrdSecGSISRVNAMES already has value")
+    messagesToIgnore.append("WARNING: While bind mounting '/etc/hosts:/etc/hosts': destination is already in the mount point list")
+    messagesToIgnore.append("WARNING: In non-interactive mode release checks e.g. deprecated releases, production architectures are disabled.")
+    messagesToIgnore.append("write error: Broken pipe")
+    messagesToIgnore.append("INFO")
+    messagesToIgnore.append("DEBUG")
+    typesOfIgnoredMessages = ["minimization status 1 warning", "limit scan pdf created","CMS connect env var warning","CMS connect mount warning", "CMS connect deprecated release warning","CMS connect broken pipe error","INFO message ended up in .err file","DEBUG message"]
+    showIgnoreMessages = [False, False, False, False, False, False, False, False]
     instancesOfIgnoredMessages = [0]*len(messagesToIgnore)
     with open(errFileName, "r") as errFile:
         for line in errFile:
@@ -876,7 +1013,7 @@ def CheckErrorFile(errFileName, throwException=True):
                         instancesOfIgnoredMessages[idx] += 1
                         ignoreLine = True
                 if not ignoreLine:
-                    print(colored("Found unexpected content '{}' in {}".format(line, errFileName), "red"))
+                    #print(colored("Found unexpected content '{}' in {}".format(line, errFileName), "red"))
                     if throwException:
                         raise RuntimeError("Found unexpected content '{}' in {}".format(line, errFileName))
     for idx, count in enumerate(instancesOfIgnoredMessages):
@@ -1028,6 +1165,7 @@ def get_value(d):
 
 def ReadBatchResultParallel(args):
     mass, errFile, rootFileName, betaValRound, quantileExp = args
+    print("ReadBatchResult for mass {}, beta {}".format(mass, betaValRound))
     # quantile = "quant{:.3f}".format(quantileExp) if quantileExp > 0 else "."
     # # quantile = str(quantile).rstrip("0")
     # quantileStr = str(quantileExp).replace(".", "p").rstrip("0")
@@ -1042,6 +1180,7 @@ def ReadBatchResultParallel(args):
     # rootFileName = FindFile(rootGlobString)
     # resultFileName = ComputeLimitsFromGrid(cardWorkspace, mass, condorDir, rootFileName, quantileExp, sigScaleFact)
     limit, limitErr, quantileFromFile, signalScaleFactor = ExtractLimitResult(rootFileName)
+    print("limit = {} for mass {}, beta {}".format(limit, mass, betaValRound))
     # betaVal = math.sqrt(signalScaleFactor)
     # betaVal = math.sqrt(float(sigScaleFact))
     # betaValRound = str(round(betaVal, 6))
@@ -1060,8 +1199,8 @@ def ReadBatchResultsBetaScan(massList, condorDir):
         for quantileExp in quantilesExpected:
             for mass in massList:
                 quantileStr = str(quantileExp).replace(".", "p").rstrip("0")
-                #globString = condorDir+'/limits/hybridNewLimits.M{}.{}.*/condor*.0.err'
-                globString = eosDirName.rstrip("/")+"/hybridNewLimits.M{}.{}.*/condor*.0.err"
+                globString = condorDir+'/limits/hybridNewLimits.M{}.{}/signalScaleFactor*/condor*.0.err'
+                #globString = eosDirName.rstrip("/")+"/hybridNewLimits.M{}.{}.*/condor*.0.err"
                 try:
                     errorFiles = GetFileList(globString.format(mass, quantileStr))
                     nJobs += len(errorFiles)
@@ -1103,8 +1242,10 @@ def ReadBatchResultsBetaScan(massList, condorDir):
                             lastPartSplit = lastPart.split("/condor")
                             sigScaleFact = lastPartSplit[0].split("signalScaleFactor")[-1]
                             signalScaleFactor = float(sigScaleFact) # FIXME: here, like previously, we should probably use the beta index instead to keep track of the unrounded scale factor
-                            rootGlobString = str(Path(errFile).parent)+'/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root'.format(sigScaleFact, mass, quantile)
-                            rootFileName = FindFile(rootGlobString)
+                            #rootGlobString = str(Path(errFile).parent)+'/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root'.format(sigScaleFact, mass, quantile)
+                            outFile = errFile.split("/condor")[0]
+                            #rootFileName = FindFile(rootGlobString)
+                            rootFileName = eosDir + "/" + options.name + "/hybridNewLimits.M{}.{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.quant0.500.root".format(mass,quantileStr,sigScaleFact,mass)#GetFilenamesFromCondorOutFiles(outFile)
                         betaVal = math.sqrt(signalScaleFactor)
                         betaValRound = str(round(betaVal, 6))
                         if not betaValRound in rLimitsByMassAndQuantile[str(quantileExp)].keys():
@@ -1244,7 +1385,7 @@ def ComputeBetaLimits(xsThByMass, xsecLimitsByMassAndQuantile):
     # print("ComputeBetaLimits: xsecLimitsByMassAndQuantile[0.5]={}".format(get_value(xsecLimitsByMassAndQuantile["0.5"])))
     for quantile in xsecLimitsByMassAndQuantile.keys():
         with Progress() as progress:
-            verbose = False
+            verbose = True
             if quantile == "0.5":
                 verbose = True
             if verbose:
@@ -1476,7 +1617,7 @@ def DoPreapprovalChecks(workspace, mass, dirName, signalScaleFactor):
 if __name__ == "__main__":
     doBatch = True
     gridPointsPerJob = 5
-    gridPointsPerJobLowQuantiles = 3
+    gridPointsPerJobLowQuantiles = 5
     gridScanPoints = 50
     doShapeBasedLimits = False
     doAsymptoticLimits = False
@@ -1485,9 +1626,9 @@ if __name__ == "__main__":
     useAsimovData = True #do or don't use asimov data in place of real data
     #NOTE: if doObservedLimit==True and useAsimovData==True, combine will calculate the observed limit using asimov toys in place of real data
     ncores = 6
-    #massList = list(range(300, 3100, 100))
-    #massList = list(range(300,2100, 100))
-    massList = [1500,1600,1700,1800,1900,2000]#,1100,1200,1300,1400]
+    massList = list(range(300, 3100, 100))
+    #massList = list(range(2200,3100, 100))
+    #massList = [1700]#,1100,1200,1300,1400]
     betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
     eosDir = "root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso"
     eosDirNoPrefix = eosDir[eosDir.rfind("//")+1:]
@@ -1765,19 +1906,36 @@ if __name__ == "__main__":
                 json.dump(rValuesByMassAndQuantile, f)
         else:
             rValuesByMassBetaAndQuantile = {}
-            scanDirName = eosDirName#+"/betaScan"
             for mass in massList:
+                scanDirName = dirName+"/asymptoticLimits/asymptotic.M{}".format(mass)
                 betasToSubmit = GetBetasToSubmit(mass)
                 rValuesByMassBetaAndQuantile[mass] = {}
-                globString = scanDirName+'/asymptotic.M{}*/condor*.0.err'.format(mass)
+                globString = scanDirName+'/signalScaleFactor*.betaIndex*/condor*.0.err'.format(mass)
+                print(globString)
                 errFiles = GetFileList(globString)
+                fileList = []
                 for f in errFiles:
-                    CheckErrorFile(f)
-                fileList = [str(FindFile(str(Path(errFile).parent)+"/higgsCombine*.AsymptoticLimits.mH{}.*.root".format(mass))) for errFile in errFiles]
+                    CheckErrorFile(f, False)
+                    betaValIndex = int(f[f.rfind("betaIndex")+9:f.find("/", f.rfind("betaIndex")+9)])
+                    if not options.cmsConnectMode:
+                        #glob does not seem to be able to find files in the exo eos space when running on cms connect
+                        #you can list/copy them with xrd from the exo space to cms connect, but you have to know the exact filename
+                        #Since the asymptotic jobs have the seed in the filename, and xrd doesn't support wildcards
+                        #(as far as I know), when we run from cms connect we have to get the limit result from the condor.out file
+                        #-Emma, 15 jan 2025
+                        fileList.append(str(FindFile(eosDir+"/"+dirName+"/asymptotic.M{}/higgsCombine.betaIndex{}.AsymptoticLimits.mH{}.*.root".format(mass, betaValIndex, mass))))
+                    else:
+                        fileList.append(str(FindFile(f.replace(".err",".out"))))
                 for f in fileList:
-                    betaValIndex = int(f[f.rfind("betaIndex")+9:f.find(".", f.rfind("betaIndex")+9)])
-                    limits, limitErrs, quantiles, signalScaleParam = ExtractAsymptoticLimitResultRoot(f)
-                    rValuesByMassBetaAndQuantile[mass][betasToSubmit[betaValIndex]] = dict(zip(quantiles, limits))
+                    betaValIndex = int(f[f.rfind("betaIndex")+9:f.find("/", f.rfind("betaIndex")+9)])
+                    if ".root" in f:
+                        limits, limitErrs, quantiles, signalScaleParam = ExtractAsymptoticLimitResultRoot(f)
+                    elif ".out" in f or ".txt" in f:
+                        limits, limitErrs, quantiles, signalScaleParam = ExtractAsymptoticLimitResultTxt(f)
+                    else:
+                        print("Error: Don't know how to extract limit from file {}".format(f))
+                    print(betaValIndex)
+                    rValuesByMassBetaAndQuantile[mass][betasToScan[betaValIndex]] = dict(zip(quantiles, limits))
             if not os.path.isdir(dirName+"/asymptoticLimits"):
                 os.mkdir(dirName+"/asymptoticLimits")
             with open(dirName+"/asymptoticLimits"+'/rValues.json', 'w') as f:
@@ -1959,7 +2117,8 @@ if __name__ == "__main__":
                                 task_id = progress.add_task("[cyan]Submitting asymptotic limit jobs to batch...", total=asymptJobs)
                                 with multiprocessing.Pool(ncores) as pool:
                                     partial_quit = partial(ErrorCallback, pool)
-                                    for idx, beta in enumerate(betasToSubmit):
+                                    for beta in betasToSubmit:
+                                        idx = betasToScan.index(beta)
                                         signalScaleFactor = beta*beta
                                         try:
                                             pool.apply_async(SubmitAsymptoticBatch, [[cardWorkspace, mass, betaDirName, listFailedCommands, blinded, signalScaleFactor, idx]], callback = lambda x: progress.advance(task_id), error_callback = partial_quit)
@@ -2065,6 +2224,7 @@ if __name__ == "__main__":
                         for idx, beta in enumerate(rValuesAtBeta.keys()):
                             signalScaleFactor = float(beta)*float(beta)
                             asimovToyFile = FindAsimovToyData(mass, signalScaleFactor, asimovToysBetaDir)
+                            #print(asimovToyFile)
                             if asimovToyFile is None:
                                 asimovScaleFactorsToGen.append(signalScaleFactor)
                         if len(asimovScaleFactorsToGen):
@@ -2073,7 +2233,8 @@ if __name__ == "__main__":
                                 partial_quit = partial(ErrorCallback, pool)
                                 for signalScaleFactor in asimovScaleFactorsToGen:
                                     try:
-                                        pool.apply_async(GenerateAsimovToyData, [[cardWorkspace, mass, asimovToysBetaDir, dictAsimovToysByScaleFactor, signalScaleFactor]], callback = lambda x: progress.advance(task_id), error_callback = partial_quit)
+                                        #print("generate asimov toy for {}".format(signalScaleFactor))
+                                        pool.apply_async(GenerateAsimovToyData, [cardWorkspace, mass, asimovToysBetaDir, dictAsimovToysByScaleFactor, signalScaleFactor], callback = lambda x: progress.advance(task_id), error_callback = partial_quit)
                                         # asimovJobs += 1
                                     except KeyboardInterrupt:
                                         print("\n\nCtrl-C detected: Bailing.")
@@ -2094,12 +2255,16 @@ if __name__ == "__main__":
                         task_id = progress.add_task("[cyan]Submitting HybridNew jobs to batch for mass {}".format(mass), total=hybridNewJobs)
                         with multiprocessing.Pool(ncores) as pool:
                             partial_quit = partial(ErrorCallback, pool)
-                            for idx, beta in enumerate(rValuesAtBeta.keys()):
-                                signalScaleFactor = float(beta)*float(beta)
-                                for qExp in quantilesExpected:
+                            for qExp in quantilesExpected:
+                                if options.cmsConnectMode and options.submitLimitJobsAfterGridGen:
+                                    inputFileList = GetFilesInDirXrd(eosDir+"/"+options.name+"/hybridNewGridGen.M{}.{}".format(mass,str(qExp).replace(".","p")))
+                                else:
+                                    inputFileList = []
+                                for idx, beta in enumerate(rValuesAtBeta.keys()):
+                                    signalScaleFactor = float(beta)*float(beta)
                                     try:
                                         asimovToyFile = FindAsimovToyData(mass, signalScaleFactor, asimovToysBetaDir)
-                                        pool.apply_async(SubmitHybridNewBatch, [[cardWorkspace, mass, betaDirName, listFailedCommands, qExp, asimovToyFile, signalScaleFactor]], callback = lambda x: progress.advance(task_id), error_callback = partial_quit)
+                                        pool.apply_async(SubmitHybridNewBatch, [[cardWorkspace, mass, betaDirName, listFailedCommands, qExp, asimovToyFile, signalScaleFactor,inputFileList]], callback = lambda x: progress.advance(task_id), error_callback = partial_quit)
                                     # hybridNewJobs += 1
                                     except KeyboardInterrupt:
                                         print("\n\nCtrl-C detected: Bailing.")
