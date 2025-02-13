@@ -31,14 +31,14 @@ if __name__ == "__main__":
         if not os.path.isdir(parentDir+"/"+d):
             continue
             #pool.apply_async(SubmitJobsInDir,[d])
-        if "0p5" in d:
+        if not "0p5" in d:
             continue
         filesToSubmit = os.listdir(parentDir+"/"+d)
         nFiles = len(filesToSubmit)
         print("\nSubmit {} condor.sub files for {}".format(nFiles,d))
         manager = multiprocessing.Manager()
         finishedFilesList = manager.list()
-        with multiprocessing.Pool(4) as pool:
+        with multiprocessing.Pool(8) as pool:
             for i,f in enumerate(filesToSubmit):
                 #SubmitJob(f,d)
             #progress_bar(i+1, nFiles, d)

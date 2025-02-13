@@ -9,13 +9,12 @@ import cmsstyle as CMS
 
 def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
     doObserved = True if len(m_observed_lljj) else False
-#    beta_vals_2sd = set(expected_lljj["0.025"]["betas"])
-#    beta_vals_1sd = set(expected_lljj["0.16"]["betas"])
+    beta_vals_2sd = set(expected_lljj["0.025"]["betas"])
+    beta_vals_1sd = set(expected_lljj["0.16"]["betas"])
     beta_vals_med = set(expected_lljj["0.5"]["betas"])
-#    beta_vals_1su = set(expected_lljj["0.84"]["betas"])
-#    beta_vals_2su = set(expected_lljj["0.975"]["betas"])
-#    beta_vals = sorted(list(beta_vals_med.intersection(beta_vals_2sd, beta_vals_1sd, beta_vals_1su, beta_vals_2su)))
-    beta_vals = sorted(list(beta_vals_med))
+    beta_vals_1su = set(expected_lljj["0.84"]["betas"])
+    beta_vals_2su = set(expected_lljj["0.975"]["betas"])
+    beta_vals = sorted(list(beta_vals_med.intersection(beta_vals_2sd, beta_vals_1sd, beta_vals_1su, beta_vals_2su)))
     print("beta_vals=", beta_vals)
     
     beta_valsdub = list(beta_vals)
@@ -30,14 +29,14 @@ def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
     m_expected_2s_lljj = []
 
     for beta in beta_vals:
-        #m_expected_2s_lljj.append(expected_lljj["0.025"]["massLimits"][expected_lljj["0.025"]["betas"].index(beta)])
-        #m_expected_1s_lljj.append(expected_lljj["0.16"]["massLimits"][expected_lljj["0.16"]["betas"].index(beta)])
+        m_expected_2s_lljj.append(expected_lljj["0.025"]["massLimits"][expected_lljj["0.025"]["betas"].index(beta)])
+        m_expected_1s_lljj.append(expected_lljj["0.16"]["massLimits"][expected_lljj["0.16"]["betas"].index(beta)])
         m_expected_med_lljj.append(expected_lljj["0.5"]["massLimits"][expected_lljj["0.5"]["betas"].index(beta)])
     print("m_expected_med_lljj=", m_expected_med_lljj)
 
-    #for beta in reversed(beta_vals):
-        #m_expected_1s_lljj.append(expected_lljj["0.84"]["massLimits"][expected_lljj["0.84"]["betas"].index(beta)])
-        #m_expected_2s_lljj.append(expected_lljj["0.975"]["massLimits"][expected_lljj["0.975"]["betas"].index(beta)])
+    for beta in reversed(beta_vals):
+        m_expected_1s_lljj.append(expected_lljj["0.84"]["massLimits"][expected_lljj["0.84"]["betas"].index(beta)])
+        m_expected_2s_lljj.append(expected_lljj["0.975"]["massLimits"][expected_lljj["0.975"]["betas"].index(beta)])
 
 
     numbetas = len(beta_vals)
@@ -158,14 +157,14 @@ def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
     #beta_vs_m_lljj_observed_shade.SetFillColor(kGreen+2)
     #beta_vs_m_lljj_observed_shade.Draw("f")
 
-    #exshade1 = TGraph(2*numbetas, numpy.array(m_expected_1s_lljj, dtype="f"), numpy.array(beta_valsdub, dtype="f"))
-    #exshade2 = TGraph(2*numbetas, numpy.array(m_expected_2s_lljj, dtype="f"), numpy.array(beta_valsdub, dtype="f"))
-    #CMS.cmsDraw(exshade2, "f", fcolor=TColor.GetColor("#F5BB54"))
-    #CMS.cmsDraw(exshade1, "f", fcolor=TColor.GetColor("#607641"))
+    exshade1 = TGraph(2*numbetas, numpy.array(m_expected_1s_lljj, dtype="f"), numpy.array(beta_valsdub, dtype="f"))
+    exshade2 = TGraph(2*numbetas, numpy.array(m_expected_2s_lljj, dtype="f"), numpy.array(beta_valsdub, dtype="f"))
+    CMS.cmsDraw(exshade2, "f", fcolor=TColor.GetColor("#F5BB54"))
+    CMS.cmsDraw(exshade1, "f", fcolor=TColor.GetColor("#607641"))
 
     # beta_vs_m_lljj_expected.Draw("C")
     # CMS.cmsDraw(beta_vs_m_lljj_expected, "C")
-    CMS.cmsDraw(beta_vs_m_lljj_expected, "p", marker=3, mcolor=kRed, lcolor=kRed, lwidth=1, lstyle=1, msize=0.001)
+    CMS.cmsDraw(beta_vs_m_lljj_expected, "p", marker=3, mcolor=kBlack, lcolor=kBlack, lwidth=1, lstyle=1, msize=0.001)
     # beta_vs_m_lvjj_expected.Draw("C")
     if doObserved:
         CMS.cmsDraw(beta_vs_m_lljj_observed, "C")

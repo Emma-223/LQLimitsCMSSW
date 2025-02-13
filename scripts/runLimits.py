@@ -184,8 +184,11 @@ def MakeCondorDirs(dirName):
             print("INFO: Making directory", idir, flush=True)
             Path(idir).mkdir(exist_ok=True)
 
-def GetFilenamesFromCondorOutFiles(dirName, nFilesExpected=1):
-    condorOutFileList = GetFileList(dirName+"/condor.*.out")
+def GetFilenamesFromCondorOutFiles(dirName, nFilesExpected=1, clusterId = ''):
+    if clusterId=='':
+        condorOutFileList = GetFileList(dirName+"/condor.*.out")
+    else:
+        condorOutFileList = GetFileList(dirName+"/condor.{}*.out".format(clusterId))
     eosFileList = []
     filesMissingOutput = []
     for file in condorOutFileList:
@@ -204,11 +207,43 @@ def GetFilenamesFromCondorOutFiles(dirName, nFilesExpected=1):
         print("The following condor*.out files are missing the eos output file path: ",filesMissingOutput)
         raise RuntimeError("Can't find eos files in all condor*.out files")
     if len(eosFileList) < nFilesExpected:
-        raise RuntimeError("Expected {} eos files, found {}".format(nFilesExpected, len(eosFileList)))
+        raise RuntimeError("In directory {}, expected {} files, found {}".format(dirName, nFilesExpected, len(eosFileList)))
     if nFilesExpected > 1:
         return eosFileList
     else:
         return eosFileList[0]
+
+def CheckAllGridGenJobs(massList, quantileList, nFilesExpected):
+    nMissingFiles = 0
+    dirname = options.name+"/gridGen/hybridNewGridGen.M{}.{}"
+    outputFiles = {}
+    for mass in massList:
+        for quant in quantileList:
+            print("INFO: Check grid gen jobs for mass {} quantile {}".format(mass,quant))
+            q = str(quant).replace(".","p")
+            subdirList = os.listdir(dirname.format(mass,q))
+            for d in subdirList:
+                condorIds = []
+                condorFiles = os.listdir(dirname.format(mass,q)+"/"+d)
+                for f in condorFiles:
+                    if ".sh" in f or ".sub" in f:
+                        continue
+                    clusterId = int(f.split(".")[1])
+                    if not clusterId in condorIds:
+                        condorIds.append(clusterId)
+                if len(condorIds)>1:
+                    idToUse = max(condorIds)
+                    #print("WARNING: found multiple condor cluster Ids in directory {}. Using highest Id {}".format(dirname.format(mass,q)+"/"+d, idToUse))
+                else:
+                    idToUse = condorIds[0]
+                try:
+                    outputFiles[dirname.format(mass,q)+"/"+d] = GetFilenamesFromCondorOutFiles(dirname.format(mass,q)+"/"+d,nFilesExpected, idToUse)
+                except Exception as e:
+                    print(e)
+                    nMissingFiles+=1
+    if nMissingFiles > 0:
+        raise RuntimeError("Some grid gen output is missing")
+    return outputFiles
 
 def WriteCondorSubFile(condorDir, filename, shFilename, nJobs, queue="workday", doGridGen=True, extractLimits=False, inputFiles=[]):
     # scanJobs = 1
@@ -235,6 +270,7 @@ def WriteCondorSubFile(condorDir, filename, shFilename, nJobs, queue="workday", 
         subfile.write("log                   = " + basename + ".$(ClusterId).$(ProcId).log\n")
         if options.cmsConnectMode:
             subfile.write('+REQUIRED_OS = "rhel9"\n')
+            subfile.write('periodic_hold = ((time() - EnteredCurrentStatus) > 28800)\n') #28800 seconds = 8 hours
         subfile.write("\n")
         if options.cmsConnectMode:
             fullPathInputFiles = [
@@ -263,7 +299,7 @@ def WriteCondorSubFile(condorDir, filename, shFilename, nJobs, queue="workday", 
         subfile.write("on_exit_hold = (ExitBySignal == True) || (ExitCode != 0)\n")
         subfile.write("\n")
         subfile.write("# Periodically retry the jobs every 10 minutes, up to a maximum of 5 retries.\n")
-        subfile.write("periodic_release =  (NumJobStarts < 3) && ((CurrentTime - EnteredCurrentStatus) > 600)\n")
+        subfile.write("periodic_release =  (NumJobStarts < 10) && ((CurrentTime - EnteredCurrentStatus) > 300)\n")
         subfile.write("\n")
         # if doGridGen:
         #     subfile.write("max_materialize={}\n".format(maxMaterialize))
@@ -376,7 +412,7 @@ def WriteCondorShFile(condorDir, filename, mass, combineCmds=[], limitCmds=[], s
                     #    shfile.write("xrdcp -fs {} {}\n".format(f, f.split("/")[-1]))
                     #    filesToCheck.append(f)
                     gridGenCondorDir = options.name+"/gridGen/hybridNewGridGen.M{}.{}/signalScaleFactor{}".format(mass,str(quantile).replace(".","p"),sigSFRound)
-                    eosFileList = GetFilenamesFromCondorOutFiles(gridGenCondorDir,nFiles)
+                    eosFileList = gridGenFilesByCondorDir[gridGenCondorDir]#GetFilenamesFromCondorOutFiles(gridGenCondorDir,nFiles)
                     for f in eosFileList:
                         shfile.write("xrdcp -fs {} {}\n".format(f, f.split("/")[-1]))
 
@@ -395,7 +431,7 @@ def WriteCondorShFile(condorDir, filename, mass, combineCmds=[], limitCmds=[], s
                 elif "0.16" in quant:
                     quantWithTrailing0s = quant.replace('0.16','0.160')
                 elif "0.84" in quant:
-                    quantWithTrailing0s = quant.replace('0.16','0.840')
+                    quantWithTrailing0s = quant.replace('0.84','0.840')
                 else:
                     quantWithTrailing0s = quant
                 files = [
@@ -658,9 +694,9 @@ def SubmitHybridNewBatch(args):
                 missingFiles = []
                 if not f.split("//")[-1] in inputFileList:
                     missingFiles.append(f)
-            if len(missingFiles):
-                print("did not find files: ",missingFiles)
-                raise RuntimeError("Some input files are missing")
+            #if len(missingFiles):
+            #    print("did not find files: ",missingFiles)
+            #    raise RuntimeError("Some input files are missing")
         else:
             if options.doSignificance:
                 condorDir = eosDirName.rstrip("/")+"/hybridNewGridGen.M{}{}.significance".format(mass, quantileStr)
@@ -974,7 +1010,7 @@ def CreateArraysForPlotting(xsecLimitsByMassAndQuantile):
 
 def GetBetaRangeToAttempt(mass):
     # get a restricted beta range to test for each mass point
-    minBetasPerMass = {300: 0,   400: 0,   500: 0.025, 600: 0.035, 700: 0.045, 800: 0.055, 900: 0.065, 1000: 0.075,  1100: 0.085, 1200: 0.095, 1300: 0.105, 1400: 0.115, 1500: 0.125, 1600: 0.125, 1700: 0.65}
+    minBetasPerMass = {300: 0,   400: 0,   500: 0.025, 600: 0.025, 700: 0.035, 800: 0.04, 900: 0.06, 1000: 0.075,  1100: 0.085, 1200: 0.095, 1300: 0.105, 1400: 0.115, 1500: 0.125, 1600: 0.125, 1700: 0.5, 1800: 0.7}
     maxBetasPerMass = {300: 0.075, 400: 0.1, 500: 0.15, 600: 0.2, 700: 0.25, 800: 0.35, 900: 0.45, 1000: 0.6, 1100: 0.7, 1200: 0.8, 1300: 0.9, 1400: 1.0, 1500: 1.0, 1600: 1.0, 1700: 1.0}
     if mass > 1700:
         return 0.9, 1.0
@@ -1245,7 +1281,7 @@ def ReadBatchResultsBetaScan(massList, condorDir):
                             #rootGlobString = str(Path(errFile).parent)+'/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root'.format(sigScaleFact, mass, quantile)
                             outFile = errFile.split("/condor")[0]
                             #rootFileName = FindFile(rootGlobString)
-                            rootFileName = eosDir + "/" + options.name + "/hybridNewLimits.M{}.{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.quant0.500.root".format(mass,quantileStr,sigScaleFact,mass)#GetFilenamesFromCondorOutFiles(outFile)
+                            rootFileName = eosDir + "/" + options.name + "/hybridNewLimits.M{}.{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root".format(mass,quantileStr,sigScaleFact,mass,quantile)#GetFilenamesFromCondorOutFiles(outFile)
                         betaVal = math.sqrt(signalScaleFactor)
                         betaValRound = str(round(betaVal, 6))
                         if not betaValRound in rLimitsByMassAndQuantile[str(quantileExp)].keys():
@@ -1616,7 +1652,7 @@ def DoPreapprovalChecks(workspace, mass, dirName, signalScaleFactor):
 ####################################################################################################
 if __name__ == "__main__":
     doBatch = True
-    gridPointsPerJob = 5
+    gridPointsPerJob = 10
     gridPointsPerJobLowQuantiles = 5
     gridScanPoints = 50
     doShapeBasedLimits = False
@@ -1628,7 +1664,7 @@ if __name__ == "__main__":
     ncores = 6
     massList = list(range(300, 3100, 100))
     #massList = list(range(2200,3100, 100))
-    #massList = [1700]#,1100,1200,1300,1400]
+    #massList = [300]#,1100,1200,1300,1400]
     betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
     eosDir = "root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso"
     eosDirNoPrefix = eosDir[eosDir.rfind("//")+1:]
@@ -1797,7 +1833,8 @@ if __name__ == "__main__":
         raise RuntimeError("Won't do beta scan without batch submission enabled (see doBatch parameter inside script).")
     if options.cmsConnectMode and options.cmsswSandbox is None:
         raise RuntimeError("Can't do CMS Connect submission without specifying a cmssw sandbox using -s. (CMSSW sandbox can be created with the cmssw-sandbox command)")
-    
+    if options.submitLimitJobsAfterGridGen:
+        gridGenFilesByCondorDir = CheckAllGridGenJobs(massList, quantilesExpected, math.ceil(gridScanPoints/gridPointsPerJob))
     if doBatch and options.crabMode:
         RunCommand("crab createmyproxy")
     manager = multiprocessing.Manager()
@@ -2038,6 +2075,8 @@ if __name__ == "__main__":
     else:
         # submit limit jobs
         startTime = time.time()
+        #if options.submitLimitJobsAfterGridGen:
+         #   CheckAllGridGenJobs(massList, quantilesExpected, math.ceil(gridScanPoints/gridPointsPerJob))
         #TODO: check for previous datacards?
         separateDatacardsDir = dirName+"/datacards"
         asimovToysDir = dirName+"/asimovData"
@@ -2256,10 +2295,10 @@ if __name__ == "__main__":
                         with multiprocessing.Pool(ncores) as pool:
                             partial_quit = partial(ErrorCallback, pool)
                             for qExp in quantilesExpected:
-                                if options.cmsConnectMode and options.submitLimitJobsAfterGridGen:
-                                    inputFileList = GetFilesInDirXrd(eosDir+"/"+options.name+"/hybridNewGridGen.M{}.{}".format(mass,str(qExp).replace(".","p")))
-                                else:
-                                    inputFileList = []
+                                #if options.cmsConnectMode and options.submitLimitJobsAfterGridGen:
+                                #    inputFileList = GetFilesInDirXrd(eosDir+"/"+options.name+"/hybridNewGridGen.M{}.{}".format(mass,str(qExp).replace(".","p")))
+                                #else:
+                                inputFileList = []
                                 for idx, beta in enumerate(rValuesAtBeta.keys()):
                                     signalScaleFactor = float(beta)*float(beta)
                                     try:

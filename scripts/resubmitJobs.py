@@ -6,8 +6,8 @@ import glob
 jobIds = []
 
 txtfile = "heldJobs.txt"
-print("get held jobs")
-subprocess.run(["condor_q","-hold",">",txtfile])
+#print("get held jobs")
+#subprocess.run(["condor_q","-hold",">",txtfile])
 
 with open(txtfile) as f:
     lines = f.readlines()
