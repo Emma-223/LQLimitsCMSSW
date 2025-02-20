@@ -18,20 +18,41 @@ def ReadXSecFile(filename):
             if line.startswith("#"):
                 continue
             split = line.split()
-            if len(split) != 7:
-                print("length of this line is not 7; don't know how to handle it. Quitting.  Line looks like '"+line+"'")
+            if len(split)==7:
+                #print("length of this line is not 7; don't know how to handle it. Quitting.  Line looks like '"+line+"'")
+                #exit(-1)
+                masses.append(float(split[0]))
+                xs = float(split[1])
+                xsTh.append(xs)
+                yPDF_up.append(xs*(1+float(split[5])/100.))
+                yPDF_down.append(xs*(1-float(split[6])/100.))
+            elif len(split)==3: #stopPair is like this
+                masses.append(float(split[0]))
+                xs = float(split[1])
+                xsTh.append(xs)
+                yPDF_up.append(xs*(1+float(split[2])/100.))
+                yPDF_down.append(xs*(1+float(split[2])/100.))
+            elif len(split)==2: #ATLAS xsec file
+                masses.append(float(split[0]))
+                xs = float(split[1])
+                xsTh.append(xs)
+                yPDF_up.append(0)
+                yPDF_down.append(0)
+            else:
+                print("length of this line is not 7 or 3 or 2; don't know how to handle it. Quitting.  Line looks like '"+line+"'")
                 exit(-1)
-            masses.append(float(split[0]))
-            xs = float(split[1])
-            xsTh.append(xs)
-            yPDF_up.append(xs*(1+float(split[5])/100.))
-            yPDF_down.append(xs*(1-float(split[6])/100.))
+            #yPDF_up.append(float(split[6]))
+            #yPDF_down.append(float(split[5]))
     return masses, xsTh, yPDF_up, yPDF_down
 
 
 def BR_Sigma_EE_vsMass(dirName=".", intLumi="35.9", mData = [], x_shademasses = [], xsUp_expected = [], xsUp_observed = [], y_1sigma = [], y_2sigma = []):
     xsThFilename = "$LQANA/config/xsection_theory_13TeV_scalarPairLQ.txt"
+    #xsThFilename = "$LQANA/config/xsection_theory_13TeV_stopPair.txt"
+    #xsThFilename = "xsection_theory_13TeV_vectorSingletU1_YM.txt"
+    #xsThFilename = "xsection_theory_13TeV_atlas.txt"
     mTh, xsTh, y_pdf, yPDFDown = ReadXSecFile(xsThFilename)
+    print(xsTh)
     nTH = len(mTh)
     massPoints = len(mData)
     x_pdf = mTh
@@ -142,7 +163,7 @@ def BR_Sigma_EE_vsMass(dirName=".", intLumi="35.9", mData = [], x_shademasses = 
 
     obslim = 0.0
     exlim = 0.0
-    for mtest in numpy.linspace(1300.0, 2000.0, 7000, endpoint=False):
+    for mtest in numpy.linspace(1300.0, 3000.0, 17000, endpoint=False):
         if pow(10.0, xsData_vs_m_expected_log.Eval(mtest))/pow(10.0, xsTh_vs_m_log.Eval(mtest)) < 1.0 and pow(10.0, xsData_vs_m_expected_log.Eval(mtest+0.1))/pow(10.0, xsTh_vs_m_log.Eval(mtest+0.10)) > 1.0:
             exlim = mtest
         if doObserved:

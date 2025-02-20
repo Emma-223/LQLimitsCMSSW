@@ -796,7 +796,15 @@ def ReadXSecFile(filename):
 
 
 def CreateArraysForPlotting(xsecLimitsByMassAndQuantile):
-    massList = sorted(list(xsecLimitsByMassAndQuantile.keys()))
+    massList = list(xsecLimitsByMassAndQuantile.keys())
+    if type(massList[0]) is str:
+        for i,m in enumerate(massList):
+            massList[i] = int(m)
+        massList.sort()
+        for i,m in enumerate(massList):
+            massList[i] = str(m)
+    else:
+        massList.sort()
     shadeMassList = []
     xs_medExpList = []
     xs_oneSigmaExpList = []
@@ -891,13 +899,14 @@ def CheckForErrorAndResultFiles(massList, condorDir):
                 signalScaleFactor = round(xsRescaleByMass[mass]/xsThByMass[mass], 6)  # we assume that the signal yields as given have been normalized with the scalar pair-prod xsec
             quantile = "quant{:.3f}".format(quantileExp) if quantileExp > 0 else "."
             quantileStr = str(quantileExp).replace(".", "p")
-            globStrings = [condorDir+'/error/hybridNewLimits.M{}.{}.*.0.err'.format(mass, quantileStr)]
-            globStrings.append(condorDir+'/gridGen/hybridNewGridGenAndLimits.M{}.{}/condor.*.0.err'.format(mass, quantileStr))
-            globStrings.append(condorDir+'/limits/hybridNewLimits.M{}.{}/condor.*.0.err'.format(mass, quantileStr))
-            if signalScaleFactor != 1.0:
-                globStrings.append(eosDirName+'/hybridNewLimits.M{}.{}.signalScaleFactor{}/condor.*.0.err'.format(mass, quantileStr, signalScaleFactor))
-            else:
-                globStrings.append(eosDirName+'/hybridNewLimits.M{}.{}/condor.*.0.err'.format(mass, quantileStr))
+            #globStrings = [condorDir+'/error/hybridNewLimits.M{}.{}.*.0.err'.format(mass, quantileStr)]
+            #globStrings.append(condorDir+'/gridGen/hybridNewGridGenAndLimits.M{}.{}/condor.*.0.err'.format(mass, quantileStr))
+            #globStrings.append(condorDir+'/limits/hybridNewLimits.M{}.{}.signalScaleFactor{}/condor.*.0.err'.format(mass, quantileStr,signalScaleFactor))
+            #if signalScaleFactor != 1.0:
+            #    globStrings.append(eosDirName+'/hybridNewLimits.M{}.{}.signalScaleFactor{}/condor.*.0.err'.format(mass, quantileStr, signalScaleFactor))
+            #else:
+            #    globStrings.append(eosDirName+'/hybridNewLimits.M{}.{}/condor.*.0.err'.format(mass, quantileStr))
+            globStrings = [eosDirName+'/hybridNewLimits.M{}.{}.signalScaleFactor*/condor.*.0.err'.format(mass, quantileStr)]
             errFileName = FindFile(globStrings)
             errFilesByMassAndQuantile[mass][quantileExp] = errFileName
             globStrings = [condorDir+'/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root'.format(signalScaleFactor, mass, quantile)]
@@ -909,6 +918,7 @@ def CheckForErrorAndResultFiles(massList, condorDir):
                     globStrings.append(eosDirName+"/hybridNewLimits.M{}.{}.signalScaleFactor{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.root".format(mass, quantileStr, signalScaleFactor, signalScaleFactor, mass))
             else:
                 globStrings.append(eosDirName+'/hybridNewLimits.M{}.{}/higgsCombine.signalScaleFactor{}.HybridNew.mH{}.{}.root'.format(mass, quantileStr, signalScaleFactor, mass, quantile))
+            globStrings.append(eosDirName+'/hybridNewLimits.M{}.{}.signalScaleFactor*/higgsCombine.signalScaleFactor*.HybridNew.mH{}.{}.root'.format(mass,quantileStr,mass, quantile))
             rootFileName = FindFile(globStrings)
             rootFilesByMassAndQuantile[mass][quantileExp] = rootFileName
     return errFilesByMassAndQuantile, rootFilesByMassAndQuantile
@@ -963,7 +973,9 @@ def ReadBatchResults(massList, condorDir):
             rootFileName = rootFilesByMassAndQuantile[mass][quantileExp]
             limit, limitErr, quantileFromFile, signalScaleFactor = ExtractLimitResult(rootFileName)
             rLimitsByMassAndQuantile[mass][str(quantileExp)] = limit
-            xsecLimitsByMassAndQuantile[mass][str(quantileExp)] = limit * (xsThByMass[float(mass)] if signalScaleFactor == 1.0 else xsRescaleByMass[mass])
+            #print(xsThByMass[float(mass)])
+            #print(xsRescaleByMass[mass])
+            xsecLimitsByMassAndQuantile[mass][str(quantileExp)] = limit * signalScaleFactor * (xsThByMass[float(mass)])# if signalScaleFactor == 1.0 else xsRescaleByMass[mass])
             signalScaleFactorsByMassAndQuantile[mass][str(quantileExp)] = signalScaleFactor
     return xsecLimitsByMassAndQuantile, signalScaleFactorsByMassAndQuantile
 
@@ -1358,47 +1370,81 @@ def InitCardsAndWorkspaces(dirName):
 
 
 # http://cms-analysis.github.io/HiggsAnalysis-CombinedLimit/part3/nonstandard/#nuisance-parameter-impacts
-def MakeImpacts(workspace, mass, dirName, signalScaleFactor):
+def MakeImpacts(workspace, mass, dirName, signalScaleFactor, asimovData=False, signal=False):
     impactsDir = dirName.strip("/")+"/impacts"
+    if not os.path.isdir(impactsDir):
+        print("INFO: Making directory", impactsDir, flush=True)
+        Path(impactsDir).mkdir()
+
+    if asimovData:
+        if signal:
+            print("Using Asimov data with signal + bkg")
+            impactsDir+="/sigPlusBkgToys"
+        else:
+            print("Using Asimov data with bkg only")
+            impactsDir+="/bkgOnlyToys"
+    else:
+        print("Using data")
+        impactsDir+="/data"
+        
     if not os.path.isdir(impactsDir):
         print("INFO: Making directory", impactsDir, flush=True)
         Path(impactsDir).mkdir()
     with Progress() as progress:
         #signalScaleFactor = signalScaleFactor * 10
-        if signalScaleFactor <=1.0:
-            signalScaleFactor = 1.0
+        #if signalScaleFactor <=1.0:
+        #    signalScaleFactor = 1.0
         task_id = progress.add_task("[cyan]Making impact plots for LQ{}".format(mass), total=5)
         rMin = -1
         if mass==3000:
-            rMin = -10
+            rMin = -5
             #signalScaleFactor *= 3
         rMax = 5
         print("INFO: Use rMin = {}".format(rMin))
         stepSize = 0.2
         combToolCmd = "combineTool.py -v2"
         cmd = combToolCmd + " -M Impacts -d {} -m {} --doInitialFit --robustFit 1 --rMin {}".format(workspace, mass, rMin, rMax)
+        if asimovData:
+            cmd += " -t -1"
+            if signal:
+                cmd += " --expectSignal 1"
         cmd += commonCombineArgs.format(signalScaleFactor)
+        print(cmd)
         RunCommand(cmd, impactsDir, None, True)
         if os.path.isfile(impactsDir+"/combine_logger.out"):
             shutil.copy(impactsDir+"/combine_logger.out", impactsDir+"/combine_logger_initialFit{}.out".format(mass))
         progress.update(task_id, advance=1)
         cmd = combToolCmd + " -M Impacts -d {} -m {} --robustFit 1 --doFits --parallel 4 --rMin {}".format(workspace, mass, rMin, rMax)
+        if asimovData:
+            cmd += " -t -1"
+            if signal:
+                cmd +=" --expectSignal 1"
         cmd += commonCombineArgs.format(signalScaleFactor)
         RunCommand(cmd, impactsDir, None, True)
         if os.path.isfile(impactsDir+"/combine_logger.out"):
             shutil.copy(impactsDir+"/combine_logger.out", impactsDir+"/combine_logger_doFits{}.out".format(mass))
         progress.update(task_id, advance=1)
         cmd = combToolCmd + " -M Impacts -d {} -m {} -o impacts.m{}.json --rMin {}".format(workspace, mass, mass, rMin)
+        if asimovData:
+            cmd += " -t -1"
+            if signal:
+                cmd += " --expectSignal 1"
         cmd += commonCombineArgs.format(signalScaleFactor)
         RunCommand(cmd, impactsDir, None, True)
         if os.path.isfile(impactsDir+"/combine_logger.out"):
             shutil.copy(impactsDir+"/combine_logger.out", impactsDir+"/combine_logger_makeJson{}.out".format(mass))
         progress.update(task_id, advance=1)
         cmd = "plotImpacts.py --summary -i impacts.m{}.json -o impacts.m{}".format(mass, mass)
+        if not asimovData:
+            cmd += " --blind"
         RunCommand(cmd, impactsDir, None, True)
         progress.update(task_id, advance=1)
 
         cmd = "combine -M MultiDimFit {} --algo grid --saveFitResult --rMin {} --points=1000 --mass {} -v2".format(workspace, rMin, mass)
+        if asimovData:
+            cmd += " -t -1"
+            if signal:
+                cmd += " --expectSignal 1"
         cmd += commonCombineArgs.format(signalScaleFactor)
         RunCommand(cmd, impactsDir, None, True)
 
@@ -1439,19 +1485,21 @@ if __name__ == "__main__":
     useAsimovData = True #do or don't use asimov data in place of real data
     #NOTE: if doObservedLimit==True and useAsimovData==True, combine will calculate the observed limit using asimov toys in place of real data
     ncores = 6
-    #massList = list(range(300, 2200, 100))
-    #massList = list(range(2200,3100, 100))
-    massList = [1500]#,1100,1200,1300,1400]
+    #massList = list(range(300, 3100, 100))
+    #massList = list(range(300,2100, 100))
+    massList = [1500,1600,1700,1800,1900,2000]#,1100,1200,1300,1400]
     betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
     eosDir = "root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso"
     eosDirNoPrefix = eosDir[eosDir.rfind("//")+1:]
     
-    #quantilesExpected = [0.025, 0.16, 0.5, 0.84, 0.975]
-    quantilesExpected = [0.5]
+    quantilesExpected = [0.025, 0.16, 0.5, 0.84, 0.975]
+    #quantilesExpected = [0.5]
     if doObservedLimit == True:
         quantilesExpected.append(-2)
     xsThFilename = "$LQANA/config/xsection_theory_13TeV_scalarPairLQ.txt"
-    # xsThFilename = "$LQANA/config/xsection_theory_13TeV_stopPair.txt"
+    #xsThFilename = "xsection_theory_13TeV_atlas.txt"
+    sigRescaleFile = "rValues_nominal.json"
+    #xsThFilename = "$LQANA/config/xsection_theory_13TeV_stopPair.txt"
     commonCombineArgs = " --setParameters signalScaleParam={} --freezeParameters signalScaleParam --trackParameters signalScaleParam"
     
     parser = OptionParser(
@@ -1591,6 +1639,14 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
     )
+    parser.add_option(
+        "--noSigSF",
+        dest="disableSigRescaling",
+        help="By default, signal is rescaled in the limit calc to set the median expected limit near r=1. Option diables this.",
+        metavar="disableSigRescaling",
+        action="store_true",
+        default=False,
+    )
     (options, args) = parser.parse_args()
     if options.datacard is None and options.readResults is None:
         raise RuntimeError("Need either option d to specify datacard, or option r to specify reading limit results from batch")
@@ -1613,10 +1669,22 @@ if __name__ == "__main__":
     #eosDir += "/"+dirName
     eosDirName = eosDirNoPrefix.rstrip("/") + "/" + dirName
     xsThByMass, _, _ = ReadXSecFile(xsThFilename)
-    rescaleSignal = False
+    if not options.disableSigRescaling:
+        with open(sigRescaleFile, 'r') as f:
+            sigRescaleFactors = json.load(f) #By mass and quantile, but they're the same for all quantiles for a given mass
+    rescaleSignal = True
     if options.xsecFileForSignalRescaling is not None:
         xsRescaleByMass, _, _ = ReadXSecFile(options.xsecFileForSignalRescaling)
-        rescaleSignal = True
+        if not options.disableSigRescaling:
+            for mass in massList:
+                xsRescaleByMass[mass] *= sigRescaleFactors[str(mass)]['0.5']
+    else:
+        if options.disableSigRescaling:
+            rescaleSignal = False
+        else:
+            xsRescaleByMass = {}
+            for mass in massList:
+                xsRescaleByMass[mass] = xsThByMass[mass] * sigRescaleFactors[str(mass)]['0.5']
     failedBatchCommands = []
     combinedDatacard = options.datacard
 
@@ -1626,7 +1694,9 @@ if __name__ == "__main__":
         datacardDir = dirName.strip("/")+"/datacards"
         for mass in massList:
             cardWorkspace = FindCardWorkspace(datacardDir + "/*", mass)
-            MakeImpacts(cardWorkspace, mass, dirName, signalScaleFactorsByMassAndQuantile[str(mass)][str(quantilesExpected[0])])
+            #MakeImpacts(cardWorkspace, mass, dirName, signalScaleFactorsByMassAndQuantile[str(mass)][str(quantilesExpected[0])]) #Data
+            MakeImpacts(cardWorkspace, mass, dirName, signalScaleFactorsByMassAndQuantile[str(mass)][str(quantilesExpected[0])], True, True) #Toys, signal + bkg
+            #MakeImpacts(cardWorkspace, mass, dirName, signalScaleFactorsByMassAndQuantile[str(mass)][str(quantilesExpected[0])],True, False) #Toys, bkg only
         print("DONE", flush=True)
 
     elif options.doHiggsPreapprovalChecks:
@@ -1723,17 +1793,24 @@ if __name__ == "__main__":
         print("Found total int lumi = {}/fb for years = {}".format(intLumi, years))
         if not options.doBetaScan:
             if options.readResults:
-                condorDir = dirName.rstrip("/") # +"/condor"
-                print("INFO: Reading results from batch from {}...".format(condorDir), flush=True)
-                xsecLimitsByMassAndQuantile, signalScaleFactorsByMassAndQuantile = ReadBatchResults(massList, condorDir)
-                if len(xsecLimitsByMassAndQuantile) and len(signalScaleFactorsByMassAndQuantile):
-                    print("DONE", flush=True)
+                if os.path.isfile(dirName+'/xsecLimits.json') and os.path.isfile(dirName+'/signalScaleFactors.json'):
+                    print("INFO: read xsection limits from "+dirName+'/xsecLimits.json')
+                    with open(dirName+'/xsecLimits.json','r') as f:
+                        xsecLimitsByMassAndQuantile = json.load(f)
+                    with open(dirName+'/signalScaleFactors.json','r') as f:
+                        signalScaleFactorsByMassAndQuantile = json.load(f)
                 else:
-                    raise RuntimeError("Got empty dicts back from ReadBatchResults; something wrong happened there.")
-            with open(dirName+'/xsecLimits.json', 'w') as f:
-                json.dump(get_value(xsecLimitsByMassAndQuantile), f)
-            with open(dirName+'/signalScaleFactors.json', 'w') as f:
-                json.dump(get_value(signalScaleFactorsByMassAndQuantile), f)
+                    condorDir = dirName.rstrip("/") # +"/condor"
+                    print("INFO: Reading results from batch from {}...".format(condorDir), flush=True)
+                    xsecLimitsByMassAndQuantile, signalScaleFactorsByMassAndQuantile = ReadBatchResults(massList, condorDir)
+                    if len(xsecLimitsByMassAndQuantile) and len(signalScaleFactorsByMassAndQuantile):
+                        print("DONE", flush=True)
+                    else:
+                        raise RuntimeError("Got empty dicts back from ReadBatchResults; something wrong happened there.")
+                    with open(dirName+'/xsecLimits.json', 'w') as f:
+                        json.dump(get_value(xsecLimitsByMassAndQuantile), f)
+                    with open(dirName+'/signalScaleFactors.json', 'w') as f:
+                        json.dump(get_value(signalScaleFactorsByMassAndQuantile), f)
             masses, shadeMasses, xsMedExp, xsOneSigmaExp, xsTwoSigmaExp, xsObs = CreateArraysForPlotting(xsecLimitsByMassAndQuantile)
             print("mData =", list(masses))
             # print("x_shademasses =", list(shadeMasses))
