@@ -518,9 +518,9 @@ def GetHybridNewCommandArgs(workspace, mass, dirName, quantiles, genAsimovToyFil
     return cmds
 
 
-def GetRMinAndRMax(mass, quantileExp, signalScaleFactor=1.0):
+def GetRMinAndRMax(mass, quantileExp, signalScaleFactor=1.0, betaId = -1):
     #print("starting rvalue = {} for quantile {} and mass{}".format(rValuesByMassAndQuantile[str(mass)][str(quantileExp)], quantileExp, mass))
-    if signalScaleFactor == 1.0 or rescaleSignal:
+    if betaId < 0:# or rescaleSignal:
         rValuesByQuantile = rValuesByMassAndQuantile[str(mass)]
         if quantileExp == 0.025 and mass > 800:# and mass <=1000: # adjust scan range upwards for lowest quantile and higher masses
             rMax = rValuesByQuantile[str(quantileExp)]*2.5
@@ -541,22 +541,22 @@ def GetRMinAndRMax(mass, quantileExp, signalScaleFactor=1.0):
             rMax = rValuesByQuantile[str(quantileExp)]*1.3
             rMin = rValuesByQuantile[str(quantileExp)]*0.75
     else:
-        beta = math.sqrt(signalScaleFactor)
+        #beta = math.sqrt(signalScaleFactor)
         if quantileExp == 0.025 and mass > 800:  # adjust scan range upwards for lowest quantile and higher masses
-            rMax = rValuesAtBeta[str(beta)][str(quantileExp)]*1.8
-            rMin = rValuesAtBeta[str(beta)][str(quantileExp)]*0.85
+            rMax = rValuesAtBeta[str(betaId)][str(quantileExp)]*1.8
+            rMin = rValuesAtBeta[str(betaId)][str(quantileExp)]*0.85
         elif quantileExp == 0.025 and mass > 1300:
-            rMax = rValuesAtBeta[str(beta)][str(quantileExp)]*2.5
-            rMin = rValuesAtBeta[str(beta)][str(quantileExp)]*1.25
+            rMax = rValuesAtBeta[str(betaId)][str(quantileExp)]*2.5
+            rMin = rValuesAtBeta[str(betaId)][str(quantileExp)]*1.25
         elif quantileExp == 0.16 and mass > 1000:
-            rMax = rValuesAtBeta[str(beta)][str(quantileExp)]*2.0
-            rMin = rValuesAtBeta[str(beta)][str(quantileExp)]*1.0
+            rMax = rValuesAtBeta[str(betaId)][str(quantileExp)]*2.0
+            rMin = rValuesAtBeta[str(betaId)][str(quantileExp)]*1.0
         # elif quantileExp == 0.975 and mass > 1500:  # adjust scan range downwards here
         #     rMax = rValuesAtBeta[str(beta)][str(quantileExp)]*1.0
         #     rMin = rValuesAtBeta[str(beta)][str(quantileExp)]*0.45
         else:
-            rMax = rValuesAtBeta[str(beta)][str(quantileExp)]*1.3
-            rMin = rValuesAtBeta[str(beta)][str(quantileExp)]*0.75
+            rMax = rValuesAtBeta[str(betaId)][str(quantileExp)]*1.3
+            rMin = rValuesAtBeta[str(betaId)][str(quantileExp)]*0.75
     #print("rValue range for quantile {}, mass {} = {} - {}".format(quantileExp, mass, rMin, rMax))
     return rMin, rMax
 
@@ -868,7 +868,7 @@ def ComputeLimitsFromGrid(workspace, mass, dirName, filename, quantile, signalSc
 def ExtractLimitResult(rootFile):
     # higgsCombineTest.MethodName.mH$MASS.[word$WORD].root
     # higgsCombineTest.HybridNew.mH120.quant0.500.root
-    if not os.path.isfile(rootFile) and not options.cmsConnectMode:
+    if not os.path.isfile(rootFile) and not "eoscms.cern.ch" in rootFile and not "fnal.gov" in rootFile:
         raise RuntimeError("ERROR: Did not find the root file {}. Exiting.".format(rootFile))
     tfile = TFile.Open(str(rootFile))
     limitTree = tfile.Get("limit")
