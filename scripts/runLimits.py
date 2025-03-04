@@ -531,9 +531,9 @@ def GetRMinAndRMax(mass, quantileExp, signalScaleFactor=1.0, betaId = -1):
         elif quantileExp == 0.16 and mass > 1000:
             rMax = rValuesByQuantile[str(quantileExp)]*2.0
             rMin = rValuesByQuantile[str(quantileExp)]*1.0
-        # elif quantileExp == 0.975 and mass > 1500:  # adjust scan range downwards here
-        #     rMax = rValuesByQuantile[str(quantileExp)]*1.0
-        #     rMin = rValuesByQuantile[str(quantileExp)]*0.45
+        elif quantileExp == 0.975 and mass > 1500:  # adjust scan range downwards here
+             rMax = rValuesByQuantile[str(quantileExp)]*1.0
+             rMin = rValuesByQuantile[str(quantileExp)]*0.45
         elif quantileExp == 0.025 and mass >=2000:
             rMax = rValuesByQuantile[str(quantileExp)]*2.5
             rMin = rValuesByQuantile[str(quantileExp)]*1.5
@@ -762,7 +762,7 @@ def SubmitHybridNewBatch(args):
 def SubmitAsymptoticBatch(args):
     workspace, mass, dirName, listFailedCommands, blinded, signalScaleFactor, index = args
     rMin = 0
-    rMax = 200
+    rMax = 300
     cmdArgs = GetAsymptoticCommandArgs(workspace, mass, dirName, blinded, signalScaleFactor, rMin, rMax)
     # cmd = "combine " + cmdArgs
     taskName = 'asymptotic.M{}'.format(mass)
@@ -1572,7 +1572,7 @@ def MakeImpacts(workspace, mass, dirName, signalScaleFactor, asimovData=False, s
         #if signalScaleFactor <=1.0:
         #    signalScaleFactor = 1.0
         task_id = progress.add_task("[cyan]Making impact plots for LQ{}".format(mass), total=5)
-        rMin = -1
+        rMin = -10
         if mass==3000:
             rMin = -5
             #signalScaleFactor *= 3
@@ -1662,9 +1662,9 @@ if __name__ == "__main__":
     useAsimovData = True #do or don't use asimov data in place of real data
     #NOTE: if doObservedLimit==True and useAsimovData==True, combine will calculate the observed limit using asimov toys in place of real data
     ncores = 6
-    massList = list(range(300, 3100, 100))
-    #massList = list(range(2200,3100, 100))
-    #massList = [300]#,1100,1200,1300,1400]
+    massList = list(range(2600, 3100, 100))
+    #massList = list(range(300,2100, 100))
+    #massList = [1700, 1800] #[1100,1200,1300,1400,1500,1600,1700,1800,1900,2000]
     betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
     eosDir = "root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso"
     eosDirNoPrefix = eosDir[eosDir.rfind("//")+1:]
@@ -1873,8 +1873,8 @@ if __name__ == "__main__":
         for mass in massList:
             cardWorkspace = FindCardWorkspace(datacardDir + "/*", mass)
             #MakeImpacts(cardWorkspace, mass, dirName, signalScaleFactorsByMassAndQuantile[str(mass)][str(quantilesExpected[0])]) #Data
-            MakeImpacts(cardWorkspace, mass, dirName, signalScaleFactorsByMassAndQuantile[str(mass)][str(quantilesExpected[0])], True, True) #Toys, signal + bkg
-            #MakeImpacts(cardWorkspace, mass, dirName, signalScaleFactorsByMassAndQuantile[str(mass)][str(quantilesExpected[0])],True, False) #Toys, bkg only
+            #MakeImpacts(cardWorkspace, mass, dirName, signalScaleFactorsByMassAndQuantile[str(mass)][str(quantilesExpected[0])], True, True) #Toys, signal + bkg
+            MakeImpacts(cardWorkspace, mass, dirName, signalScaleFactorsByMassAndQuantile[str(mass)][str(quantilesExpected[0])],True, False) #Toys, bkg only
         print("DONE", flush=True)
 
     elif options.doHiggsPreapprovalChecks:
@@ -2292,7 +2292,7 @@ if __name__ == "__main__":
                         rValuesAtBeta = rValuesByMassBetaAndQuantile[str(mass)]
                         hybridNewJobs = len(rValuesAtBeta.keys())
                         task_id = progress.add_task("[cyan]Submitting HybridNew jobs to batch for mass {}".format(mass), total=hybridNewJobs)
-                        with multiprocessing.Pool(ncores) as pool:
+                        with multiprocessing.Pool(ncores,maxtasksperchild=1) as pool:
                             partial_quit = partial(ErrorCallback, pool)
                             for qExp in quantilesExpected:
                                 #if options.cmsConnectMode and options.submitLimitJobsAfterGridGen:
