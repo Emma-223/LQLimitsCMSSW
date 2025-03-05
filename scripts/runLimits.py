@@ -1414,6 +1414,8 @@ def get_simple_intersection(graph1, graph2, xmin, xmax, verbose=False):
 def ComputeBetaLimits(xsThByMass, xsecLimitsByMassAndQuantile):
     mTh = np.array(list(xsThByMass.keys()), dtype="f")
     xsTh = np.array(list(xsThByMass.items()), dtype="f")
+    print("INFO: Theory masses = ",mTh)
+    print("INFO: Theory xs = ",xsTh)
     g = TGraph(len(mTh), mTh, xsTh);
     # spline = TSpline3("xsection", g)
     logtheory = loggraph(list(xsThByMass.keys()), list(xsThByMass.values()))  # make graph with log10 of y values
@@ -1429,11 +1431,16 @@ def ComputeBetaLimits(xsThByMass, xsecLimitsByMassAndQuantile):
             else:
                 task_id = progress.add_task("[cyan]Computing beta limits for quantile={}...".format(quantile), total=len(xsecLimitsByMassAndQuantile[quantile].keys()))
             massLimitsByQuantileAndBetaVal[quantile] = {}
-            for betaVal in sorted(xsecLimitsByMassAndQuantile[quantile].keys()):
-                limit_set = list(xsecLimitsByMassAndQuantile[quantile][betaVal].values())
-                massList = [int(mass) for mass in xsecLimitsByMassAndQuantile[quantile][betaVal].keys()]
+            betaIds = list(xsecLimitsByMassAndQuantile[quantile].keys())
+            for i,b in enumerate(betaIds):
+                betaIds[i] = int(b)
+            for betaId in sorted(betaIds):
+                betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
+                betaVal = betasToScan[int(betaId)]
+                limit_set = list(xsecLimitsByMassAndQuantile[quantile][str(betaId)].values())
+                massList = [int(mass) for mass in xsecLimitsByMassAndQuantile[quantile][str(betaId)].keys()]
                 if verbose:
-                    print("\tINFO: examine betaVal={}".format(betaVal))
+                    print("\tINFO: examine betaId={}, value={}".format(betaId,betaVal))
                     print("\tINFO: examine massList={}, limit_set={}".format(massList, limit_set))
                     if len(massList) < 2:
                         print("\tWARN: Skipping beta value={} as we only have one mass point tested here({})! Need to adjust beta scan range.".format(betaVal, massList))
@@ -1452,9 +1459,9 @@ def ComputeBetaLimits(xsThByMass, xsecLimitsByMassAndQuantile):
                     print("\tINFO: for betaVal={}: bestmass, mindif={}".format(betaVal, goodm))
                 if goodm[0] < min(massList) or goodm[0] > max(massList):
                     if verbose:
-                        print("\tWARN: For beta value={}, intersection mass {} is outside of massList range {}! Need to adjust beta scan range.".format(goodm[0], betaVal, massList))
+                        print("\tWARN: For beta value={}, intersection mass {} is outside of massList range {}! Need to adjust beta scan range.".format(betaVal, goodm[0],  massList))
                 else:
-                    massLimitsByQuantileAndBetaVal[quantile][betaVal] = round(goodm[0], 3)
+                    massLimitsByQuantileAndBetaVal[quantile][str(betaId)] = round(goodm[0], 3)
                 if not verbose:
                     progress.advance(task_id)
             # print("ComputeBetaLimits: finished quantile={}".format(quantile), flush=True)
@@ -1463,18 +1470,20 @@ def ComputeBetaLimits(xsThByMass, xsecLimitsByMassAndQuantile):
 
 
 def CreateComboArrays(xsecLimitsByMassAndQuantile):
+    betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
     retVal = {}
     for quantile in xsecLimitsByMassAndQuantile.keys():
         retVal[quantile] = {}
         retVal[quantile]["betas"] = []
         retVal[quantile]["massLimits"] = []
-        sortedBetas = sorted([float(beta) for beta in xsecLimitsByMassAndQuantile[quantile].keys()])
+        sortedBetas = sorted([int(beta) for beta in xsecLimitsByMassAndQuantile[quantile].keys()])
         # for betaVal, mass in xsecLimitsByMassAndQuantile[quantile].items():
-        for betaVal in sortedBetas:
+        for betaId in sortedBetas:
+            betaVal = betasToScan[int(betaId)]
             retVal[quantile]["betas"].append(betaVal)
-            if str(betaVal) not in xsecLimitsByMassAndQuantile[quantile].keys():
+            if str(betaId) not in xsecLimitsByMassAndQuantile[quantile].keys():
                 print("Oops! now trying to get out {} from array which does not have it in its keys: {}".format(str(betaVal), xsecLimitsByMassAndQuantile[quantile].keys()))
-            retVal[quantile]["massLimits"].append(float(xsecLimitsByMassAndQuantile[quantile][str(betaVal)]))
+            retVal[quantile]["massLimits"].append(float(xsecLimitsByMassAndQuantile[quantile][str(betaId)]))
     return retVal
 
 

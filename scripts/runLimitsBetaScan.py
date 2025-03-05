@@ -47,6 +47,7 @@ from runLimits import (
     CheckForErrorAndResultFiles,
     ComputeBetaLimits,
     CreateComboArrays,
+    get_value,
 )
 
 if not 'LQANA' in os.environ:
@@ -379,16 +380,16 @@ def ReadLimitJobResults(mass,quant,beta,rootFile):
     betaVal = betasToScan[beta]
     sigSF = betaVal**2
     limit, limitErr, qFromFile, sigSFFromFile = ExtractLimitResult(rootFile)
-    rLimitsByMassBetaAndQuantile[str(mass)][str(quant)][str(beta)] = limit
-    xsecLimitsByMassBetaAndQuantile[str(mass)][str(quant)][str(beta)] = limit * sigSF * xsThByMass[float(mass)]
+    rLimitsByMassBetaAndQuantile[str(quant)][str(beta)][str(mass)] = limit
+    xsecLimitsByMassBetaAndQuantile[str(quant)][str(beta)][str(mass)] = limit * xsThByMass[float(mass)]
 
 
 #################################################################################
 # Run
 #################################################################################
 if __name__ == "__main__":
-    #massList = list(range(300,2100,100))
-    massList = [1000]
+    massList = list(range(300,2100,100))
+    #massList = [1000]
     #massList = list(range(300,1300,100)) + list(range(1400,2100,100))
     betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
     nBetasPerCondorSub = 10
@@ -396,8 +397,8 @@ if __name__ == "__main__":
     nGridPointsPerSubFile = 10
     eosDir = "root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso"
     eosDirNoPrefix = eosDir[eosDir.rfind("//")+1:]
-    #quantilesExpected = [0.025, 0.16, 0.5, 0.84, 0.975]
-    quantilesExpected = [0.025]
+    quantilesExpected = [0.025, 0.16, 0.5, 0.84, 0.975]
+    #quantilesExpected = [0.025]
     xsThFilename = "$LQANA/config/xsection_theory_13TeV_scalarPairLQ.txt"
     commonCombineArgs = " --setParameters signalScaleParam={} --freezeParameters signalScaleParam --trackParameters signalScaleParam"
     blinded = True
@@ -524,46 +525,64 @@ if __name__ == "__main__":
             exit()
         else:
             start = time.time()
-            rLimitsByMassBetaAndQuantile = manager.dict()
-            xsecLimitsByMassBetaAndQuantile = manager.dict()
-            for mass in massList:
-                rLimitsByMassBetaAndQuantile[str(mass)] = manager.dict()
-                xsecLimitsByMassBetaAndQuantile[str(mass)] = manager.dict()
-                betasToSubmit = GetBetasToSubmit(mass)
-                betaLists = SplitBetasBetweenCondorSubmissions(betasToSubmit,nBetasPerCondorSub)
+            needToReadRootFiles = True
+            if os.path.isfile(dirName+"/xsecLimits.json"):
+                with open(dirName+"/xsecLimits.json",'r') as f:
+                    xsecLimitsByMassBetaAndQuantile = json.load(f)
+                needToReadRootFiles = False
+            if os.path.isfile(dirName+"/rLimits.json"):
+                with open(dirName+"/rLimits.json",'r') as f:
+                    rLimitsByMassBetaAndQuantile = json.load(f)
+            if needToReadRootFiles:
+                rLimitsByMassBetaAndQuantile = manager.dict()
+                xsecLimitsByMassBetaAndQuantile = manager.dict()
                 for quant in quantilesExpected:
-                    rLimitsByMassBetaAndQuantile[str(mass)][str(quant)] = manager.dict()
-                    xsecLimitsByMassBetaAndQuantile[str(mass)][str(quant)] = manager.dict()
-                    with Progress() as progress:
-                        task_id = progress.add_task("[cyan]Reading batch results for mass {}, quantile {}".format(mass,quant),total=len(betasToSubmit))
-                        with multiprocessing.Pool(ncores,maxtasksperchild=1) as pool:
-                            partial_quit = partial(ErrorCallback,pool)
-                            for beta in betasToSubmit:
-                                try:
-                                    rootFile = limitFileNamesByMassBetaAndQuantile[str(mass)][str(quant)][str(beta)]
-                                    rootFile = "root://eoscms.cern.ch/"+rootFile[0]
-                                    #rootFile = "root://cmseos.fnal.gov/"+rootFile[0].replace("/eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/","/store/user/")
-                                    args = [mass,quant,beta,rootFile]
-                                    pool.apply_async(ReadLimitJobResults,args, callback = lambda x: progress.advance(task_id), error_callback = partial_quit)
-                                except Exception as e:
-                                    print("ERROR: caught exception reading limit job results for mass {}, quantile {}, beta id {}".format(mass, quantile, beta))
-                            pool.close()
-                            pool.join()
-            #with open(dirName+"/rLimits.json",'w') as f:
-            #    json.dump(rLimitsByMassBetaAndQuantile,f)
-            #with open(dirName+"/xsecLimits.json","w") as f:
-            #    json.dump(xsecLimitsByMassBetaAndQuantile,f)
-            #massLimits = ComputeBetaLimits(xsThByMass, xsecLimitsByMassBetaAndQuantile)
-            #with open(dirName+"/massLimits.json","w") as f:
-            #    json.dump(get_value(massLimits),f)
-            #comboArraysByQuantile = CreateComboArrays(massLimits)
-            #with open(dirName+"/comboArrays.json","w") as f:
-            #    json.dump(get_value(comboArraysByQuantile),f)
+                    rLimitsByMassBetaAndQuantile[str(quant)] = manager.dict()
+                    xsecLimitsByMassBetaAndQuantile[str(quant)] = manager.dict()
+                for mass in massList:
+                    betasToSubmit = GetBetasToSubmit(mass)
+                    betaLists = SplitBetasBetweenCondorSubmissions(betasToSubmit,nBetasPerCondorSub)
+                    for quant in quantilesExpected:
+                        with Progress() as progress:
+                            task_id = progress.add_task("[cyan]Reading batch results for mass {}, quantile {}".format(mass,quant),total=len(betasToSubmit))
+                            with multiprocessing.Pool(ncores,maxtasksperchild=1) as pool:
+                                partial_quit = partial(ErrorCallback,pool)
+                                for beta in betasToSubmit:
+                                    if not str(beta) in rLimitsByMassBetaAndQuantile[str(quant)].keys():
+                                        rLimitsByMassBetaAndQuantile[str(quant)][str(beta)] = manager.dict()
+                                    if not str(beta) in xsecLimitsByMassBetaAndQuantile[str(quant)].keys():
+                                        xsecLimitsByMassBetaAndQuantile[str(quant)][str(beta)] = manager.dict()
+                                    try:
+                                        rootFile = limitFileNamesByMassBetaAndQuantile[str(mass)][str(quant)][str(beta)]
+                                        rootFile = "root://eoscms.cern.ch/"+rootFile[0]
+                                        #rootFile = "root://cmseos.fnal.gov/"+rootFile[0].replace("/eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/","/store/user/")
+                                        args = [mass,quant,beta,rootFile]
+                                        pool.apply_async(ReadLimitJobResults,args, callback = lambda x: progress.advance(task_id), error_callback = partial_quit)
+                                    except Exception as e:
+                                        print("ERROR: caught exception reading limit job results for mass {}, quantile {}, beta id {}".format(mass, quantile, beta))
+                                pool.close()
+                                pool.join()
+                with open(dirName+"/rLimits.json",'w') as f:
+                    json.dump(get_value(rLimitsByMassBetaAndQuantile),f)
+                with open(dirName+"/xsecLimits.json","w") as f:
+                    json.dump(get_value(xsecLimitsByMassBetaAndQuantile),f)
+            if not os.path.isfile(dirName+"/massLimits.json"):
+                massLimits = ComputeBetaLimits(xsThByMass, xsecLimitsByMassBetaAndQuantile)
+                with open(dirName+"/massLimits.json","w") as f:
+                    json.dump(get_value(massLimits),f)
+            else:
+                with open(dirName+"/massLimits.json","r") as f:
+                    massLimits = json.load(f)
+            comboArraysByQuantile = CreateComboArrays(massLimits)
+            with open(dirName+"/comboArrays.json","w") as f:
+                json.dump(get_value(comboArraysByQuantile),f)
             end = time.time()
             tot = end - start
             print("Time to read results: {}".format(tot))
-            exit()
+            years, intLumi = GetYearAndIntLumiFromDatacard(combinedDatacard)
+            intLumi *= 0.001
             ComboPlot(dirName, intLumi, comboArraysByQuantile)
+            exit()
 
     separateDatacardsDir = dirName+"/datacards"
     if not os.path.isdir(dirName):
