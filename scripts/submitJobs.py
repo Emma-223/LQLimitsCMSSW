@@ -33,6 +33,8 @@ if __name__ == "__main__":
             #pool.apply_async(SubmitJobsInDir,[d])
         #if not "0p5" in d:
          #   continue
+        if not "M1300" in d:
+            continue
         filesToSubmit = os.listdir(parentDir+"/"+d)
         nFiles = len(filesToSubmit)
         print("\nSubmit {} condor.sub files for {}".format(nFiles,d))

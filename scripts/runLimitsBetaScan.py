@@ -389,7 +389,6 @@ def ReadLimitJobResults(mass,quant,beta,rootFile):
 #################################################################################
 if __name__ == "__main__":
     massList = list(range(300,2100,100))
-    #massList = [1000]
     #massList = list(range(300,1300,100)) + list(range(1400,2100,100))
     betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
     nBetasPerCondorSub = 10
@@ -500,6 +499,7 @@ if __name__ == "__main__":
                 raise RuntimeError("Did not find all limit job output files")
             with open(dirName+"/limitFilenames.json",'w') as f:
                 json.dump(limitFileNamesByMassBetaAndQuantile,f)
+                exit()
 
     if options.readResults:
         if options.estimateRValueScanRange:
