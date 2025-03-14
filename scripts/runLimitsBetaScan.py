@@ -264,9 +264,13 @@ def WriteCondorFilesAsymptotic(cardWorkspace, betaList, mass, condorDir):
         f.writelines(shFileCommonLines)
         f.write("\n")
         for i,betaIdx in enumerate(betaList):
+            if not options.disableSigRescaling:
+                scaleFactor = sigRescaleByMassBetaAndQuantile[str(mass)][str(betaIdx)]['0.5']
+            else:
+                scaleFactor = 1.0
             betaVal = betasToScan[betaIdx]
             cmd = "combine {} -v1 -M AsymptoticLimits --seed -1 --strict --rMax 200 --rMin 0 -m {} --rAbsAcc 0.0001 -n .betaId{}".format(cardWorkspace.split("/")[-1], mass, betaIdx)
-            cmd += " "+commonCombineArgs.format(betaVal**2)
+            cmd += " "+commonCombineArgs.format(scaleFactor * betaVal**2)
             if blinded:
                 cmd += " --run blind --expectSignal 0"
             f.write("if [ $1 -eq {} ]; then\n".format(i))
@@ -291,8 +295,8 @@ def SplitBetasBetweenCondorSubmissions(betas, nBetasPerFile):
 
 def GetBetaRangeToAttempt(mass):
     minBetasPerMass = {300: 0,   400: 0,   500: 0.025, 600: 0.025, 700: 0.035, 800: 0.04, 900: 0.06, 1000: 0.075,  1100: 0.085, 1200: 0.095, 1300: 0.105, 1400: 0.115, 1500: 0.125, 1600: 0.125, 1700: 0.5, 1800: 0.7}
-    maxBetasPerMass = {300: 0.075, 400: 0.1, 500: 0.15, 600: 0.2, 700: 0.25, 800: 0.35, 900: 0.45, 1000: 0.6, 1100: 0.7, 1200: 0.8, 1300: 0.9, 1400: 1.0, 1500: 1.0, 1600: 1.0, 1700: 1.0}
-    if mass > 1700:
+    maxBetasPerMass = {300: 0.075, 400: 0.1, 500: 0.15, 600: 0.2, 700: 0.25, 800: 0.35, 900: 0.45, 1000: 0.6, 1100: 0.7, 1200: 0.8, 1300: 0.9, 1400: 1.0, 1500: 1.0, 1600: 1.0, 1700: 1.0, 1800: 1.0}
+    if mass > 1800:
         return 0.9,1.0
     else:
         return minBetasPerMass[mass], maxBetasPerMass[mass]
@@ -399,6 +403,7 @@ if __name__ == "__main__":
     quantilesExpected = [0.025, 0.16, 0.5, 0.84, 0.975]
     #quantilesExpected = [0.025]
     xsThFilename = "$LQANA/config/xsection_theory_13TeV_scalarPairLQ.txt"
+    sigRescaleFile = "rValues_nominal.json"
     commonCombineArgs = " --setParameters signalScaleParam={} --freezeParameters signalScaleParam --trackParameters signalScaleParam"
     blinded = True
     sandbox = os.getenv("HOME")+"/sandbox-CMSSW_14_1_0_pre4-8e58ceb.tar.bz2"
@@ -464,6 +469,14 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
     )
+    parser.add_option(
+        "--noSigSF",
+        dest="disableSigRescaling",
+        help="disable rescaling of signal yields to set r close to 1",
+        metavar="disableSigRescaling",
+        action="store_true",
+        default=False,
+    )
     (options, args) = parser.parse_args()
     combinedDatacard = options.datacard
     manager = multiprocessing.Manager()
@@ -500,6 +513,9 @@ if __name__ == "__main__":
             with open(dirName+"/limitFilenames.json",'w') as f:
                 json.dump(limitFileNamesByMassBetaAndQuantile,f)
                 exit()
+    if not options.disableSigRescaling:
+        with open(sigRescaleFile,'r') as f:
+            sigRescaleByMassBetaAndQuantile = json.load(f)
 
     if options.readResults:
         if options.estimateRValueScanRange:

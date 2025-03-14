@@ -551,18 +551,18 @@ def GetRMinAndRMax(mass, quantileExp, signalScaleFactor=1.0, betaId = -1):
             rMin = rValuesByQuantile[str(quantileExp)]*0.75
     else:
         #beta = math.sqrt(signalScaleFactor)
-        if quantileExp == 0.025 and mass > 800:  # adjust scan range upwards for lowest quantile and higher masses
+        if quantileExp == 0.025 and mass > 800 and mass <1200:  # adjust scan range upwards for lowest quantile and higher masses
             rMax = rValuesAtBeta[str(betaId)][str(quantileExp)]*1.8
             rMin = rValuesAtBeta[str(betaId)][str(quantileExp)]*0.85
-        elif quantileExp == 0.025 and mass > 1300:
+        elif quantileExp == 0.025 and mass >= 1200:
             rMax = rValuesAtBeta[str(betaId)][str(quantileExp)]*2.5
             rMin = rValuesAtBeta[str(betaId)][str(quantileExp)]*1.25
         elif quantileExp == 0.16 and mass > 1000:
             rMax = rValuesAtBeta[str(betaId)][str(quantileExp)]*2.0
             rMin = rValuesAtBeta[str(betaId)][str(quantileExp)]*1.0
-        # elif quantileExp == 0.975 and mass > 1500:  # adjust scan range downwards here
-        #     rMax = rValuesAtBeta[str(beta)][str(quantileExp)]*1.0
-        #     rMin = rValuesAtBeta[str(beta)][str(quantileExp)]*0.45
+        elif quantileExp == 0.975 and mass >= 1200:  # adjust scan range downwards here
+            rMax = rValuesAtBeta[str(beta)][str(quantileExp)]*0.9
+            rMin = rValuesAtBeta[str(beta)][str(quantileExp)]*0.3
         else:
             rMax = rValuesAtBeta[str(betaId)][str(quantileExp)]*1.3
             rMin = rValuesAtBeta[str(betaId)][str(quantileExp)]*0.75
