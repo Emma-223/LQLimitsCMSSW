@@ -108,11 +108,11 @@ def WriteCondorSubFile(condorDir,inputFiles,nJobs):
         inputFiles += [combineBin, sandbox, cmssw_setup_script]
         f.write("transfer_input_files = {}\n".format(",".join(inputFiles)))
         f.write("should_transfer_files = YES\n\n")
-        f.write("max_retries = 100\n")
+        f.write("max_retries = 10\n")
         f.write("on_exit_hold = (ExitBySignal == True) || (ExitCode != 0)\n")
-        f.write("periodic_hold = (JobStatus == 2) && ((CurrentTime - EnteredCurrentStatus) > 8 * 60 * 60)\n")#runs for > 8hrs
-        f.write("periodic_hold_reason = \"ran for more than 8 hrs\"\n")
-        f.write("periodic_release =  (NumJobStarts < 100) && ((CurrentTime - EnteredCurrentStatus) > 300)\n\n")
+        f.write("periodic_hold = (JobStatus == 2) && ((CurrentTime - EnteredCurrentStatus) > 24 * 60 * 60)\n")#runs for > 24hrs
+        f.write("periodic_hold_reason = \"ran for more than 24 hrs\"\n")
+        f.write("periodic_release =  (NumJobStarts < 10) && ((CurrentTime - EnteredCurrentStatus) > 300)\n\n")
         f.write("queue {}\n".format(nJobs))
 
 def GetCommonCondorShFileLines(filesToMove):
@@ -290,12 +290,16 @@ def SplitBetasBetweenCondorSubmissions(betas, nBetasPerFile):
     return listOfBetaLists
 
 def GetBetaRangeToAttempt(mass):
-    minBetasPerMass = {300: 0,   400: 0,   500: 0.025, 600: 0.025, 700: 0.035, 800: 0.04, 900: 0.06, 1000: 0.075,  1100: 0.085, 1200: 0.095, 1300: 0.105, 1400: 0.115, 1500: 0.125, 1600: 0.125, 1700: 0.5, 1800: 0.7}
-    maxBetasPerMass = {300: 0.075, 400: 0.1, 500: 0.15, 600: 0.2, 700: 0.25, 800: 0.35, 900: 0.45, 1000: 0.6, 1100: 0.7, 1200: 0.8, 1300: 0.9, 1400: 1.0, 1500: 1.0, 1600: 1.0, 1700: 1.0}
-    if mass > 1700:
-        return 0.9,1.0
-    else:
+    minBetasPerMass = {300: 0,   400: 0,   500: 0, 600: 0, 700: 0, 800: 0, 900: 0, 1000: 0,  1100: 0.085, 1200: 0.095, 1300: 0.105, 1400: 0.115, 1500: 0.125, 1600: 0.125, 1700: 0.5, 1800: 0.7}
+    maxBetasPerMass = {300: 0.075, 400: 0.1, 500: 0.15, 600: 0.2, 700: 0.25, 800: 0.35, 900: 0.45, 1000: 0.6, 1100: 0.7, 1200: 0.8, 1300: 0.9, 1400: 1.0, 1500: 1.0, 1600: 1.0, 1700: 1.0, 1800: 1.0}
+    if mass in minBetasPerMass.keys():
         return minBetasPerMass[mass], maxBetasPerMass[mass]
+    else:
+        return 0.8,1.0
+    #if mass > 1800:
+    #    return 0.8,1.0
+    #else:
+    #    return minBetasPerMass[mass], maxBetasPerMass[mass]
 
 def GetBetasToSubmit(mass):
     minBeta, maxBeta = GetBetaRangeToAttempt(int(mass))
@@ -388,8 +392,8 @@ def ReadLimitJobResults(mass,quant,beta,rootFile):
 # Run
 #################################################################################
 if __name__ == "__main__":
-    massList = list(range(300,2100,100))
-    #massList = list(range(300,1300,100)) + list(range(1400,2100,100))
+    #massList = list(range(300,2100,100))
+    massList = [1800]
     betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
     nBetasPerCondorSub = 10
     nGridPoints = 50
@@ -499,6 +503,7 @@ if __name__ == "__main__":
                 raise RuntimeError("Did not find all limit job output files")
             with open(dirName+"/limitFilenames.json",'w') as f:
                 json.dump(limitFileNamesByMassBetaAndQuantile,f)
+                print("limit files written to "+dirName+"/limitFilenames.json")
                 exit()
 
     if options.readResults:
