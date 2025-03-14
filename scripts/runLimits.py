@@ -518,45 +518,54 @@ def GetHybridNewCommandArgs(workspace, mass, dirName, quantiles, genAsimovToyFil
     return cmds
 
 
-def GetRMinAndRMax(mass, quantileExp, signalScaleFactor=1.0):
+def GetRMinAndRMax(mass, quantileExp, signalScaleFactor=1.0, betaId = -1):
     #print("starting rvalue = {} for quantile {} and mass{}".format(rValuesByMassAndQuantile[str(mass)][str(quantileExp)], quantileExp, mass))
-    if signalScaleFactor == 1.0 or rescaleSignal:
+    if betaId < 0:# or rescaleSignal:
         rValuesByQuantile = rValuesByMassAndQuantile[str(mass)]
-        if quantileExp == 0.025 and mass > 800:# and mass <=1000: # adjust scan range upwards for lowest quantile and higher masses
+        if quantileExp == 0.025 and mass > 800 and mass <=2000: # adjust scan range upwards for lowest quantile and higher masses
             rMax = rValuesByQuantile[str(quantileExp)]*2.5
             rMin = rValuesByQuantile[str(quantileExp)]*1.25
         #elif quantileExp == 0.025 and mass > 1000 and mass < 2000:
          #   rMax = rValuesByQuantile[str(quantileExp)]*3.5
           #  rMin = rValuesByQuantile[str(quantileExp)]*2.25
-        elif quantileExp == 0.16 and mass > 1000:
+        elif quantileExp == 0.16 and mass > 1000 and mass <2000:
             rMax = rValuesByQuantile[str(quantileExp)]*2.0
             rMin = rValuesByQuantile[str(quantileExp)]*1.0
         elif quantileExp == 0.975 and mass > 1500:  # adjust scan range downwards here
              rMax = rValuesByQuantile[str(quantileExp)]*1.0
              rMin = rValuesByQuantile[str(quantileExp)]*0.45
-        elif quantileExp == 0.025 and mass >=2000:
-            rMax = rValuesByQuantile[str(quantileExp)]*2.5
-            rMin = rValuesByQuantile[str(quantileExp)]*1.5
+        elif (quantileExp == 0.025 or quantileExp==0.16) and mass >=2000 and mass <2500:
+            rMax = rValuesByQuantile[str(quantileExp)]*5.0
+            rMin = rValuesByQuantile[str(quantileExp)]*1.0
+        elif quantileExp==0.84 and mass >= 2000:
+            rMax = rValuesByQuantile[str(quantileExp)]*1.0
+            rMin = rValuesByQuantile[str(quantileExp)]*0.45
+        elif (quantileExp==0.025 or quantileExp==0.16) and mass >= 2500:
+            rMax = rValuesByQuantile[str(quantileExp)]*5.0
+            rMin = rValuesByQuantile[str(quantileExp)]*1.0
+        elif quantileExp==0.5 and mass >= 2800:
+            rMax = rValuesByQuantile[str(quantileExp)]*2
+            rMin = rValuesByQuantile[str(quantileExp)]*1
         else:
             rMax = rValuesByQuantile[str(quantileExp)]*1.3
             rMin = rValuesByQuantile[str(quantileExp)]*0.75
     else:
-        beta = math.sqrt(signalScaleFactor)
+        #beta = math.sqrt(signalScaleFactor)
         if quantileExp == 0.025 and mass > 800:  # adjust scan range upwards for lowest quantile and higher masses
-            rMax = rValuesAtBeta[str(beta)][str(quantileExp)]*1.8
-            rMin = rValuesAtBeta[str(beta)][str(quantileExp)]*0.85
+            rMax = rValuesAtBeta[str(betaId)][str(quantileExp)]*1.8
+            rMin = rValuesAtBeta[str(betaId)][str(quantileExp)]*0.85
         elif quantileExp == 0.025 and mass > 1300:
-            rMax = rValuesAtBeta[str(beta)][str(quantileExp)]*2.5
-            rMin = rValuesAtBeta[str(beta)][str(quantileExp)]*1.25
+            rMax = rValuesAtBeta[str(betaId)][str(quantileExp)]*2.5
+            rMin = rValuesAtBeta[str(betaId)][str(quantileExp)]*1.25
         elif quantileExp == 0.16 and mass > 1000:
-            rMax = rValuesAtBeta[str(beta)][str(quantileExp)]*2.0
-            rMin = rValuesAtBeta[str(beta)][str(quantileExp)]*1.0
+            rMax = rValuesAtBeta[str(betaId)][str(quantileExp)]*2.0
+            rMin = rValuesAtBeta[str(betaId)][str(quantileExp)]*1.0
         # elif quantileExp == 0.975 and mass > 1500:  # adjust scan range downwards here
         #     rMax = rValuesAtBeta[str(beta)][str(quantileExp)]*1.0
         #     rMin = rValuesAtBeta[str(beta)][str(quantileExp)]*0.45
         else:
-            rMax = rValuesAtBeta[str(beta)][str(quantileExp)]*1.3
-            rMin = rValuesAtBeta[str(beta)][str(quantileExp)]*0.75
+            rMax = rValuesAtBeta[str(betaId)][str(quantileExp)]*1.3
+            rMin = rValuesAtBeta[str(betaId)][str(quantileExp)]*0.75
     #print("rValue range for quantile {}, mass {} = {} - {}".format(quantileExp, mass, rMin, rMax))
     return rMin, rMax
 
@@ -676,7 +685,7 @@ def SubmitLimitJobsBatch(mass, dirName, listFailedCommands, quantiles, signalSca
 
 
 def SubmitHybridNewBatch(args):
-    workspace, mass, dirName, listFailedCommands, quantiles, genAsimovToyFile, signalScaleFactor, inputFileList = args
+    workspace, mass, dirName, listFailedCommands, quantiles, genAsimovToyFile, signalScaleFactor = args
     quantileStr = "."+str(quantiles).replace(".", "p") if not isinstance(quantiles, list) else ""
     if options.submitLimitJobsAfterGridGen:
         queue = "longlunch"
@@ -868,7 +877,7 @@ def ComputeLimitsFromGrid(workspace, mass, dirName, filename, quantile, signalSc
 def ExtractLimitResult(rootFile):
     # higgsCombineTest.MethodName.mH$MASS.[word$WORD].root
     # higgsCombineTest.HybridNew.mH120.quant0.500.root
-    if not os.path.isfile(rootFile) and not options.cmsConnectMode:
+    if not os.path.isfile(rootFile) and not "eoscms.cern.ch" in rootFile and not "fnal.gov" in rootFile:
         raise RuntimeError("ERROR: Did not find the root file {}. Exiting.".format(rootFile))
     tfile = TFile.Open(str(rootFile))
     limitTree = tfile.Get("limit")
@@ -1414,6 +1423,8 @@ def get_simple_intersection(graph1, graph2, xmin, xmax, verbose=False):
 def ComputeBetaLimits(xsThByMass, xsecLimitsByMassAndQuantile):
     mTh = np.array(list(xsThByMass.keys()), dtype="f")
     xsTh = np.array(list(xsThByMass.items()), dtype="f")
+    print("INFO: Theory masses = ",mTh)
+    print("INFO: Theory xs = ",xsTh)
     g = TGraph(len(mTh), mTh, xsTh);
     # spline = TSpline3("xsection", g)
     logtheory = loggraph(list(xsThByMass.keys()), list(xsThByMass.values()))  # make graph with log10 of y values
@@ -1429,11 +1440,16 @@ def ComputeBetaLimits(xsThByMass, xsecLimitsByMassAndQuantile):
             else:
                 task_id = progress.add_task("[cyan]Computing beta limits for quantile={}...".format(quantile), total=len(xsecLimitsByMassAndQuantile[quantile].keys()))
             massLimitsByQuantileAndBetaVal[quantile] = {}
-            for betaVal in sorted(xsecLimitsByMassAndQuantile[quantile].keys()):
-                limit_set = list(xsecLimitsByMassAndQuantile[quantile][betaVal].values())
-                massList = [int(mass) for mass in xsecLimitsByMassAndQuantile[quantile][betaVal].keys()]
+            betaIds = list(xsecLimitsByMassAndQuantile[quantile].keys())
+            for i,b in enumerate(betaIds):
+                betaIds[i] = int(b)
+            for betaId in sorted(betaIds):
+                betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
+                betaVal = betasToScan[int(betaId)]
+                limit_set = list(xsecLimitsByMassAndQuantile[quantile][str(betaId)].values())
+                massList = [int(mass) for mass in xsecLimitsByMassAndQuantile[quantile][str(betaId)].keys()]
                 if verbose:
-                    print("\tINFO: examine betaVal={}".format(betaVal))
+                    print("\tINFO: examine betaId={}, value={}".format(betaId,betaVal))
                     print("\tINFO: examine massList={}, limit_set={}".format(massList, limit_set))
                     if len(massList) < 2:
                         print("\tWARN: Skipping beta value={} as we only have one mass point tested here({})! Need to adjust beta scan range.".format(betaVal, massList))
@@ -1452,9 +1468,9 @@ def ComputeBetaLimits(xsThByMass, xsecLimitsByMassAndQuantile):
                     print("\tINFO: for betaVal={}: bestmass, mindif={}".format(betaVal, goodm))
                 if goodm[0] < min(massList) or goodm[0] > max(massList):
                     if verbose:
-                        print("\tWARN: For beta value={}, intersection mass {} is outside of massList range {}! Need to adjust beta scan range.".format(goodm[0], betaVal, massList))
+                        print("\tWARN: For beta value={}, intersection mass {} is outside of massList range {}! Need to adjust beta scan range.".format(betaVal, goodm[0],  massList))
                 else:
-                    massLimitsByQuantileAndBetaVal[quantile][betaVal] = round(goodm[0], 3)
+                    massLimitsByQuantileAndBetaVal[quantile][str(betaId)] = round(goodm[0], 3)
                 if not verbose:
                     progress.advance(task_id)
             # print("ComputeBetaLimits: finished quantile={}".format(quantile), flush=True)
@@ -1463,18 +1479,20 @@ def ComputeBetaLimits(xsThByMass, xsecLimitsByMassAndQuantile):
 
 
 def CreateComboArrays(xsecLimitsByMassAndQuantile):
+    betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
     retVal = {}
     for quantile in xsecLimitsByMassAndQuantile.keys():
         retVal[quantile] = {}
         retVal[quantile]["betas"] = []
         retVal[quantile]["massLimits"] = []
-        sortedBetas = sorted([float(beta) for beta in xsecLimitsByMassAndQuantile[quantile].keys()])
+        sortedBetas = sorted([int(beta) for beta in xsecLimitsByMassAndQuantile[quantile].keys()])
         # for betaVal, mass in xsecLimitsByMassAndQuantile[quantile].items():
-        for betaVal in sortedBetas:
+        for betaId in sortedBetas:
+            betaVal = betasToScan[int(betaId)]
             retVal[quantile]["betas"].append(betaVal)
-            if str(betaVal) not in xsecLimitsByMassAndQuantile[quantile].keys():
+            if str(betaId) not in xsecLimitsByMassAndQuantile[quantile].keys():
                 print("Oops! now trying to get out {} from array which does not have it in its keys: {}".format(str(betaVal), xsecLimitsByMassAndQuantile[quantile].keys()))
-            retVal[quantile]["massLimits"].append(float(xsecLimitsByMassAndQuantile[quantile][str(betaVal)]))
+            retVal[quantile]["massLimits"].append(float(xsecLimitsByMassAndQuantile[quantile][str(betaId)]))
     return retVal
 
 
@@ -1579,8 +1597,10 @@ def MakeImpacts(workspace, mass, dirName, signalScaleFactor, asimovData=False, s
         rMax = 5
         print("INFO: Use rMin = {}".format(rMin))
         stepSize = 0.2
-        combToolCmd = "combineTool.py -v2"
+        combToolCmd = "combineTool.py -v3"
         cmd = combToolCmd + " -M Impacts -d {} -m {} --doInitialFit --robustFit 1 --rMin {}".format(workspace, mass, rMin, rMax)
+        #cmd += " --cminDefaultMinimizerType GSLMultiMin --cminDefaultMinimizerAlgo SteepestDescent "
+        cmd += " --cminDefaultMinimizerStrategy 1 --cminFallbackAlgo Minuit2,Migrad,0:0.1 --cminFallbackAlgo Minuit2,Migrad,1:1.0 --cminFallbackAlgo Minuit2,Migrad,0:1.0 --X-rtd MINIMIZER_MaxCalls=999999999 --X-rtd MINIMIZER_analytic --X-rtd FAST_VERTICAL_MORPH"
         if asimovData:
             cmd += " -t -1"
             if signal:
@@ -1592,6 +1612,9 @@ def MakeImpacts(workspace, mass, dirName, signalScaleFactor, asimovData=False, s
             shutil.copy(impactsDir+"/combine_logger.out", impactsDir+"/combine_logger_initialFit{}.out".format(mass))
         progress.update(task_id, advance=1)
         cmd = combToolCmd + " -M Impacts -d {} -m {} --robustFit 1 --doFits --parallel 4 --rMin {}".format(workspace, mass, rMin, rMax)
+        #cmd += " --cminDefaultMinimizerType GSLMultiMin --cminDefaultMinimizerAlgo SteepestDescent "
+        cmd+=" --rMax 3"
+        cmd += " --cminDefaultMinimizerStrategy 1 --cminFallbackAlgo Minuit2,Migrad,0:0.1 --cminFallbackAlgo Minuit2,Migrad,1:1.0 --cminFallbackAlgo Minuit2,Migrad,0:1.0 --X-rtd MINIMIZER_MaxCalls=999999999 --X-rtd MINIMIZER_analytic --X-rtd FAST_VERTICAL_MORPH"
         if asimovData:
             cmd += " -t -1"
             if signal:
@@ -1618,6 +1641,7 @@ def MakeImpacts(workspace, mass, dirName, signalScaleFactor, asimovData=False, s
         progress.update(task_id, advance=1)
 
         cmd = "combine -M MultiDimFit {} --algo grid --saveFitResult --rMin {} --points=1000 --mass {} -v2".format(workspace, rMin, mass)
+        cmd += " --cminDefaultMinimizerStrategy 1 --cminFallbackAlgo Minuit2,Migrad,0:0.1 --cminFallbackAlgo Minuit2,Migrad,1:1.0 --cminFallbackAlgo Minuit2,Migrad,0:1.0 --X-rtd MINIMIZER_MaxCalls=999999999 --X-rtd MINIMIZER_analytic --X-rtd FAST_VERTICAL_MORPH"
         if asimovData:
             cmd += " -t -1"
             if signal:
@@ -1662,9 +1686,9 @@ if __name__ == "__main__":
     useAsimovData = True #do or don't use asimov data in place of real data
     #NOTE: if doObservedLimit==True and useAsimovData==True, combine will calculate the observed limit using asimov toys in place of real data
     ncores = 6
-    massList = list(range(300, 3100, 100))
-    #massList = list(range(2200,3100, 100))
-    #massList = [300]#,1100,1200,1300,1400]
+    #massList = list(range(1400, 3100, 100))
+    #massList = list(range(300,2100, 100))
+    massList = [1500,1600,1700] #[1100,1200,1300,1400,1500,1600,1700,1800,1900,2000]
     betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
     eosDir = "root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso"
     eosDirNoPrefix = eosDir[eosDir.rfind("//")+1:]
@@ -1676,6 +1700,8 @@ if __name__ == "__main__":
     xsThFilename = "$LQANA/config/xsection_theory_13TeV_scalarPairLQ.txt"
     #xsThFilename = "xsection_theory_13TeV_atlas.txt"
     sigRescaleFile = "rValues_nominal.json"
+    #sigRescaleFile = "rValues_YM.json"
+    #sigRescaleFile = "rValues_minimal.json"
     #xsThFilename = "$LQANA/config/xsection_theory_13TeV_stopPair.txt"
     commonCombineArgs = " --setParameters signalScaleParam={} --freezeParameters signalScaleParam --trackParameters signalScaleParam"
     
@@ -1833,8 +1859,8 @@ if __name__ == "__main__":
         raise RuntimeError("Won't do beta scan without batch submission enabled (see doBatch parameter inside script).")
     if options.cmsConnectMode and options.cmsswSandbox is None:
         raise RuntimeError("Can't do CMS Connect submission without specifying a cmssw sandbox using -s. (CMSSW sandbox can be created with the cmssw-sandbox command)")
-    if options.submitLimitJobsAfterGridGen:
-        gridGenFilesByCondorDir = CheckAllGridGenJobs(massList, quantilesExpected, math.ceil(gridScanPoints/gridPointsPerJob))
+    #if options.submitLimitJobsAfterGridGen:
+    #    gridGenFilesByCondorDir = CheckAllGridGenJobs(massList, quantilesExpected, math.ceil(gridScanPoints/gridPointsPerJob))
     if doBatch and options.crabMode:
         RunCommand("crab createmyproxy")
     manager = multiprocessing.Manager()
@@ -1868,13 +1894,16 @@ if __name__ == "__main__":
 
     if options.doImpacts:
         print("INFO: Making nuisance parameter impact plots...", flush=True, end="")
-        signalScaleFactorsByMassAndQuantile = InitCardsAndWorkspaces(dirName)
+        #signalScaleFactorsByMassAndQuantile = InitCardsAndWorkspaces(dirName)
+        InitCardsAndWorkspaces(dirName)
         datacardDir = dirName.strip("/")+"/datacards"
         for mass in massList:
+            sigSF = sigRescaleFactors[str(mass)]['0.5']
+            print("INFO: For mass {} use scale factor {}".format(mass,sigSF))
             cardWorkspace = FindCardWorkspace(datacardDir + "/*", mass)
-            #MakeImpacts(cardWorkspace, mass, dirName, signalScaleFactorsByMassAndQuantile[str(mass)][str(quantilesExpected[0])]) #Data
-            #MakeImpacts(cardWorkspace, mass, dirName, signalScaleFactorsByMassAndQuantile[str(mass)][str(quantilesExpected[0])], True, True) #Toys, signal + bkg
-            MakeImpacts(cardWorkspace, mass, dirName, signalScaleFactorsByMassAndQuantile[str(mass)][str(quantilesExpected[0])],True, False) #Toys, bkg only
+            MakeImpacts(cardWorkspace, mass, dirName, sigSF)#signalScaleFactorsByMassAndQuantile[str(mass)][str(quantilesExpected[0])]) #Data
+            #MakeImpacts(cardWorkspace, mass, dirName, sigSF, True, True)#signalScaleFactorsByMassAndQuantile[str(mass)][str(quantilesExpected[0])], True, True) #Toys, signal + bkg
+            #MakeImpacts(cardWorkspace, mass, dirName, sigSF, True, False) #signalScaleFactorsByMassAndQuantile[str(mass)][str(quantilesExpected[0])],True, False) #Toys, bkg only
         print("DONE", flush=True)
 
     elif options.doHiggsPreapprovalChecks:
@@ -2020,7 +2049,11 @@ if __name__ == "__main__":
                 execTimeStr = GetExecTimeStr(startTime, stopTime)
                 print("Total limit calculation execution time:", execTimeStr)
             print("Make plot and calculate mass limit")
-            BR_Sigma_EE_vsMass(dirName, intLumi, masses, shadeMasses, xsMedExp, xsObs, xsOneSigmaExp, xsTwoSigmaExp)
+            if options.xsecFileForSignalRescaling is not None:
+                thXsecToPlot = options.xsecFileForSignalRescaling
+            else:
+                thXsecToPlot = xsThFilename
+            BR_Sigma_EE_vsMass(dirName, intLumi, masses, shadeMasses, xsMedExp, xsObs, xsOneSigmaExp, xsTwoSigmaExp, thXsecToPlot)
         else:
             mainDirName = dirName
             betaDirName = dirName #+"/betaScan"

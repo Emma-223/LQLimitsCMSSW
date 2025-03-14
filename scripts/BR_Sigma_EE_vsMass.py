@@ -24,8 +24,15 @@ def ReadXSecFile(filename):
                 masses.append(float(split[0]))
                 xs = float(split[1])
                 xsTh.append(xs)
-                yPDF_up.append(xs*(1+float(split[5])/100.))
-                yPDF_down.append(xs*(1-float(split[6])/100.))
+                if "scalar" in filename:
+                    yPDF_up.append(xs*(1+float(split[5])/100.))
+                    yPDF_down.append(xs*(1-float(split[6])/100.))
+                elif "vector" in filename:
+                    yPDF_up.append(float(split[6]))
+                    yPDF_down.append(float(split[5]))
+                else:
+                    print("Do not know how to assign yPDF_up/down for this xsec file. Quitting.")
+                    exit(-1)
             elif len(split)==3: #stopPair is like this
                 masses.append(float(split[0]))
                 xs = float(split[1])
@@ -46,8 +53,8 @@ def ReadXSecFile(filename):
     return masses, xsTh, yPDF_up, yPDF_down
 
 
-def BR_Sigma_EE_vsMass(dirName=".", intLumi="35.9", mData = [], x_shademasses = [], xsUp_expected = [], xsUp_observed = [], y_1sigma = [], y_2sigma = []):
-    xsThFilename = "$LQANA/config/xsection_theory_13TeV_scalarPairLQ.txt"
+def BR_Sigma_EE_vsMass(dirName=".", intLumi="35.9", mData = [], x_shademasses = [], xsUp_expected = [], xsUp_observed = [], y_1sigma = [], y_2sigma = [], xsThFilename="xsection_theory_13TeV_scalarPairLQ.txt"):
+    #xsThFilename = "$LQANA/config/xsection_theory_13TeV_scalarPairLQ.txt"
     #xsThFilename = "$LQANA/config/xsection_theory_13TeV_stopPair.txt"
     #xsThFilename = "xsection_theory_13TeV_vectorSingletU1_YM.txt"
     #xsThFilename = "xsection_theory_13TeV_atlas.txt"
@@ -278,7 +285,10 @@ def BR_Sigma_EE_vsMass(dirName=".", intLumi="35.9", mData = [], x_shademasses = 
     # legend.SetTextSize(.036)
     # legend.SetTextFont(42)
     legend.SetMargin(0.15)
-    legend.SetHeader("Scalar LQ #bar{LQ} #rightarrow eejj")
+    if "vector" in xsThFilename:
+        legend.SetHeader("Vector LQ #bar{LQ} #rightarrow eejj")
+    else:
+        legend.SetHeader("Scalar LQ #bar{LQ} #rightarrow eejj")
     # legend.AddEntry(p2,"ATLAS exclusion (20 fb^{-1}, 8TeV)","f")
     # legend.AddEntry(pl,"CMS exclusion (19.7 fb^{-1}, 8 TeV)","f")
     # legend.AddEntry(p3,"CMS exclusion (2.7 fb^{-1}, 13 TeV)","f")

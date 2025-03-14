@@ -31,7 +31,9 @@ if __name__ == "__main__":
         if not os.path.isdir(parentDir+"/"+d):
             continue
             #pool.apply_async(SubmitJobsInDir,[d])
-        if not "0p5" in d:
+        #if not "0p5" in d:
+         #   continue
+        if not "M1300" in d:
             continue
         filesToSubmit = os.listdir(parentDir+"/"+d)
         nFiles = len(filesToSubmit)
