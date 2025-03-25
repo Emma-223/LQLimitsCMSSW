@@ -457,7 +457,7 @@ def GetHybridNewCommandArgs(workspace, mass, dirName, quantiles, genAsimovToyFil
         quantiles = [quantiles]
     rAbsAcc = 0.0001
     clsAcc = 0 if batch else 0.001
-    toysDefault = 10000
+    toysDefault = 20000
     # toys = 500  # reduced for shape-based limits as test, but still took hours
     cmds = []
     for quantile in quantiles:
@@ -1590,7 +1590,7 @@ def MakeImpacts(workspace, mass, dirName, signalScaleFactor, asimovData=False, s
         #if signalScaleFactor <=1.0:
         #    signalScaleFactor = 1.0
         task_id = progress.add_task("[cyan]Making impact plots for LQ{}".format(mass), total=5)
-        rMin = -10
+        rMin = -1
         if mass==3000:
             rMin = -5
             #signalScaleFactor *= 3
@@ -1600,7 +1600,9 @@ def MakeImpacts(workspace, mass, dirName, signalScaleFactor, asimovData=False, s
         combToolCmd = "combineTool.py -v3"
         cmd = combToolCmd + " -M Impacts -d {} -m {} --doInitialFit --robustFit 1 --rMin {}".format(workspace, mass, rMin, rMax)
         #cmd += " --cminDefaultMinimizerType GSLMultiMin --cminDefaultMinimizerAlgo SteepestDescent "
-        cmd += " --cminDefaultMinimizerStrategy 1 --cminFallbackAlgo Minuit2,Migrad,0:0.1 --cminFallbackAlgo Minuit2,Migrad,1:1.0 --cminFallbackAlgo Minuit2,Migrad,0:1.0 --X-rtd MINIMIZER_MaxCalls=999999999 --X-rtd MINIMIZER_analytic --X-rtd FAST_VERTICAL_MORPH"
+    #    cmd += " --cminDefaultMinimizerStrategy 1 --cminFallbackAlgo Minuit2,Migrad,0:0.1 --cminFallbackAlgo Minuit2,Migrad,1:1.0 --cminFallbackAlgo Minuit2,Migrad,0:1.0 --X-rtd MINIMIZER_MaxCalls=999999999 --X-rtd MINIMIZER_analytic --X-rtd FAST_VERTICAL_MORPH"
+        cmd += " --rMax 3"
+        cmd += " --keepFailures "
         if asimovData:
             cmd += " -t -1"
             if signal:
@@ -1614,7 +1616,8 @@ def MakeImpacts(workspace, mass, dirName, signalScaleFactor, asimovData=False, s
         cmd = combToolCmd + " -M Impacts -d {} -m {} --robustFit 1 --doFits --parallel 4 --rMin {}".format(workspace, mass, rMin, rMax)
         #cmd += " --cminDefaultMinimizerType GSLMultiMin --cminDefaultMinimizerAlgo SteepestDescent "
         cmd+=" --rMax 3"
-        cmd += " --cminDefaultMinimizerStrategy 1 --cminFallbackAlgo Minuit2,Migrad,0:0.1 --cminFallbackAlgo Minuit2,Migrad,1:1.0 --cminFallbackAlgo Minuit2,Migrad,0:1.0 --X-rtd MINIMIZER_MaxCalls=999999999 --X-rtd MINIMIZER_analytic --X-rtd FAST_VERTICAL_MORPH"
+        #cmd += " --keepFailures "
+        #cmd += " --cminDefaultMinimizerStrategy 1 --cminFallbackAlgo Minuit2,Migrad,0:0.1 --cminFallbackAlgo Minuit2,Migrad,1:1.0 --cminFallbackAlgo Minuit2,Migrad,0:1.0 --X-rtd MINIMIZER_MaxCalls=999999999 --X-rtd MINIMIZER_analytic --X-rtd FAST_VERTICAL_MORPH"
         if asimovData:
             cmd += " -t -1"
             if signal:
@@ -1642,6 +1645,7 @@ def MakeImpacts(workspace, mass, dirName, signalScaleFactor, asimovData=False, s
 
         cmd = "combine -M MultiDimFit {} --algo grid --saveFitResult --rMin {} --points=1000 --mass {} -v2".format(workspace, rMin, mass)
         cmd += " --cminDefaultMinimizerStrategy 1 --cminFallbackAlgo Minuit2,Migrad,0:0.1 --cminFallbackAlgo Minuit2,Migrad,1:1.0 --cminFallbackAlgo Minuit2,Migrad,0:1.0 --X-rtd MINIMIZER_MaxCalls=999999999 --X-rtd MINIMIZER_analytic --X-rtd FAST_VERTICAL_MORPH"
+        cmd+=" --rMax 3"
         if asimovData:
             cmd += " -t -1"
             if signal:
@@ -1687,8 +1691,8 @@ if __name__ == "__main__":
     #NOTE: if doObservedLimit==True and useAsimovData==True, combine will calculate the observed limit using asimov toys in place of real data
     ncores = 6
     #massList = list(range(1400, 3100, 100))
-    #massList = list(range(300,2100, 100))
-    massList = [1500,1600,1700] #[1100,1200,1300,1400,1500,1600,1700,1800,1900,2000]
+    massList = list(range(300,3100, 100))
+    #massList = [2700,2800,2900,3000] #[1100,1200,1300,1400,1500,1600,1700,1800,1900,2000]
     betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
     eosDir = "root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso"
     eosDirNoPrefix = eosDir[eosDir.rfind("//")+1:]
