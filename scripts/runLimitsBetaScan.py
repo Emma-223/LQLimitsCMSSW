@@ -403,7 +403,7 @@ def ReadLimitJobResults(mass,quant,beta,rootFile):
     if options.disableSigRescaling:
         sigSF = 1.0
     else:
-        sigSF = sigRescaleByMassBetaAndQuantile[str(mass)][str(betaIdx)]['0.5']
+        sigSF = sigRescaleByMassBetaAndQuantile[str(mass)][str(beta)]['0.5']
     limit, limitErr, qFromFile, sigSFFromFile = ExtractLimitResult(rootFile)
     rLimitsByMassBetaAndQuantile[str(quant)][str(beta)][str(mass)] = limit
     xsecLimitsByMassBetaAndQuantile[str(quant)][str(beta)][str(mass)] = limit * sigSF * xsThByMass[float(mass)]
