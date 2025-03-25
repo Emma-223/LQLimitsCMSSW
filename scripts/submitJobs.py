@@ -13,7 +13,7 @@ def GetOkCondorSites():
         for line in siteConfFile:
             if "DefaultSites" in line:
                 siteList = line.split("=")[-1].strip().split(",")
-    sitesToExclude = ["T2_TR_METU", "T2_UA_KIPT", "T1_ES_PIC", "T2_TW_NCHC", "T2_US_MIT", "T2_UA_KIPT", "T2_ES_IFCA", "T2_EE_Estonia", "T2_ES_CIEMAT"]
+    sitesToExclude = ["T2_TR_METU", "T2_UA_KIPT", "T1_ES_PIC", "T2_TW_NCHC", "T2_US_MIT", "T2_UA_KIPT", "T2_ES_IFCA", "T2_EE_Estonia", "T2_ES_CIEMAT", "T3_US_UMiss"]
     for s in sitesToExclude:
         if s in siteList:
             siteList.remove(s)
@@ -35,8 +35,14 @@ def SubmitJob(f,dirname):
     #time.sleep(randint(2,5)) # for troubleshooting the progress bar
     #subprocess.check_output([okSitesCmd,"condor_submit",filename])
     exitCode = os.WEXITSTATUS(os.system(okSitesCmd+" condor_submit "+filename+" > {}/{}/{}/condor_submit_log.txt".format(parentDir,dirname,f)))
+#    with open("{}/{}/{}/condor_submit_log.txt".format(parentDir,dirname,f)) as f:
+#        lines = f.readlines()
+#    outTxt = " ".join(lines)
     finishedFilesList.append(f)
     progress_bar(len(finishedFilesList), nFiles,dirname)
+    #if "MAX_JOBS_PER_OWNER" in outTxt:
+    if not exitCode==0:
+        print("ERROR: something went wrong while submitting {}. You may be over the job submission limit".format(filename))
 
 if __name__ == "__main__":
 
@@ -45,6 +51,7 @@ if __name__ == "__main__":
     okSitesCmd = GetOkCondorSites()
 
     dirList = os.listdir(parentDir)
+    totalFiles = 0
     for d in dirList:
         if not os.path.isdir(parentDir+"/"+d):
             continue
@@ -57,11 +64,8 @@ if __name__ == "__main__":
         finishedFilesList = manager.list()
         with multiprocessing.Pool(8) as pool:
             for i,f in enumerate(filesToSubmit):
-                if not "betaIds3" in f:
-                    continue
-                #SubmitJob(f,d)
-            #progress_bar(i+1, nFiles, d)
+                totalFiles += 1
                 pool.apply_async(SubmitJob, [f,d])#, callback = progress_bar(i+1, nFiles, d))
             pool.close()
             pool.join()
-    print("\nDone submitting jobs")
+    print("\nDone submitting jobs. Total number of sub files = {}".format(totalFiles))

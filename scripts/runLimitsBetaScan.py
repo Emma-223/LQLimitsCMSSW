@@ -79,11 +79,18 @@ def FindAsimovToyDataBetaId(mass, betaId, toysDir):
 def GetRMinAndRMax(mass, quant, betaId):
     rMed = rValuesByMassBetaAndQuantile[str(mass)][str(betaId)][str(quant)]
     if quant == 0.025 and mass > 800:
-        rMax = 1.8
-        rMin = 0.85
+        if mass < 1200:
+            rMax = 1.8
+            rMin = 0.85
+        else:
+            rMax = 2.5
+            rMin = 1.25
     elif quant == 0.16 and mass > 1000:
         rMax = 2.0
         rMin = 1.0
+    elif quant == 0.975 and mass >= 1200:
+        rMax = 0.9
+        rMin = 0.3
     else:
         rMax = 1.3
         rMin = 0.75
@@ -108,6 +115,7 @@ def WriteCondorSubFile(condorDir,inputFiles,nJobs):
         inputFiles += [combineBin, sandbox, cmssw_setup_script]
         f.write("transfer_input_files = {}\n".format(",".join(inputFiles)))
         f.write("should_transfer_files = YES\n\n")
+        f.write("max_materialize = 50\n")
         f.write("max_retries = 10\n")
         f.write("on_exit_hold = (ExitBySignal == True) || (ExitCode != 0)\n")
         f.write("periodic_hold = (JobStatus == 2) && ((CurrentTime - EnteredCurrentStatus) > 24 * 60 * 60)\n")#runs for > 24hrs
@@ -152,7 +160,11 @@ def WriteCondorFilesLimits(cardWorkspace,mass,quant,betaList,condorDir,asimovToy
         f.write("\n")
         for i, betaId in enumerate(betaList):
             betaVal = betasToScan[betaId]
-            scaleFactor = betaVal**2
+            if not options.disableSigRescaling:
+                scaleFactor = sigRescaleByMassBetaAndQuantile[str(mass)][str(betaIdx)]['0.5'] 
+            else:
+                scaleFactor = 1.0
+            scaleFactor *= betaVal**2
             rMin, rMax = GetRMinAndRMax(mass, quant,betaId)
             f.write("if [ $1 -eq {} ]; then\n".format(i))
             f.write("  sigSF={}\n".format(scaleFactor))
@@ -186,8 +198,6 @@ def WriteCondorFilesLimits(cardWorkspace,mass,quant,betaList,condorDir,asimovToy
 
 def WriteCondorFilesGridGen(cardWorkspace,mass,quant,betaList,condorDir,asimovToys):
     eosPath = eosDir + "/" + condorDir
-    nGridPoints = 50
-    nGridPointsPerSubFile = 10
     inputFiles = [cardWorkspace] + asimovToys
     nJobs = len(betaList)* int(50/nGridPointsPerSubFile)
     WriteCondorSubFile(condorDir, inputFiles, nJobs)
@@ -206,8 +216,12 @@ def WriteCondorFilesGridGen(cardWorkspace,mass,quant,betaList,condorDir,asimovTo
         f.writelines(shFileCommonLines)
         f.write("\n")
         for i, betaIdx in enumerate(betaList):
+            if not options.disableSigRescaling:
+                scaleFactor = sigRescaleByMassBetaAndQuantile[str(mass)][str(betaIdx)]['0.5']
+            else:
+                scaleFactor = 1.0
             betaVal = betasToScan[betaIdx]
-            scaleFactor = betaVal**2
+            scaleFactor *= betaVal**2
             jobIdMin = int(50/nGridPointsPerSubFile) * i
             jobIdMax = jobIdMin + int(50/nGridPointsPerSubFile) - 1
             rMin, rMax = GetRMinAndRMax(mass, quant,betaIdx)
@@ -386,28 +400,31 @@ def CheckCondorJobsAndGetFilenames():
                     
 def ReadLimitJobResults(mass,quant,beta,rootFile):
     betaVal = betasToScan[beta]
-    sigSF = betaVal**2
+    if options.disableSigRescaling:
+        sigSF = 1.0
+    else:
+        sigSF = sigRescaleByMassBetaAndQuantile[str(mass)][str(betaIdx)]['0.5']
     limit, limitErr, qFromFile, sigSFFromFile = ExtractLimitResult(rootFile)
     rLimitsByMassBetaAndQuantile[str(quant)][str(beta)][str(mass)] = limit
-    xsecLimitsByMassBetaAndQuantile[str(quant)][str(beta)][str(mass)] = limit * xsThByMass[float(mass)]
+    xsecLimitsByMassBetaAndQuantile[str(quant)][str(beta)][str(mass)] = limit * sigSF * xsThByMass[float(mass)]
 
 
 #################################################################################
 # Run
 #################################################################################
 if __name__ == "__main__":
-    #massList = list(range(300,2100,100))
-    massList = [1800]
+    massList = list(range(300,2100,100))
+    #massList = [1800]
     betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
     nBetasPerCondorSub = 10
     nGridPoints = 50
-    nGridPointsPerSubFile = 10
+    nGridPointsPerSubFile = 5
     eosDir = "root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso"
     eosDirNoPrefix = eosDir[eosDir.rfind("//")+1:]
     quantilesExpected = [0.025, 0.16, 0.5, 0.84, 0.975]
     #quantilesExpected = [0.025]
     xsThFilename = "$LQANA/config/xsection_theory_13TeV_scalarPairLQ.txt"
-    sigRescaleFile = "rValues_nominal.json"
+    sigRescaleFile = "rValues_nominal_betaScan.json"
     commonCombineArgs = " --setParameters signalScaleParam={} --freezeParameters signalScaleParam --trackParameters signalScaleParam"
     blinded = True
     sandbox = os.getenv("HOME")+"/sandbox-CMSSW_14_1_0_pre4-8e58ceb.tar.bz2"
