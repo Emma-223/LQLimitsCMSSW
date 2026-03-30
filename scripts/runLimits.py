@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import copy
 from optparse import OptionParser
 import subprocess
 import shlex
@@ -20,15 +21,17 @@ from functools import partial
 from pathlib import Path
 from bisect import bisect
 from tabulate import tabulate
-from ROOT import TFile, TGraph, TSpline3
+from decimal import Decimal
+from ROOT import TFile, TGraph, TSpline3, TH1D, TCanvas, TLegend, kRed, TPad
 
 from BR_Sigma_EE_vsMass import BR_Sigma_EE_vsMass
 from ComboPlotLQ1 import ComboPlot
+from datacardUtils import GetTableEntryStr, RoundToNSigFigs, GetNDecimalDigits, RoundToN
 
 if not 'LQANA' in os.environ:
     raise RuntimeError('Need to define $LQANA environment variable to point to your git clone of the rootNtupleAnalyzerV2 repo.')
 sys.path.append(os.getenv("LQANA").rstrip("/") + "/scripts/")
-
+print(os.getenv("LQANA"))
 from combineCommon import SeparateDatacards, GetYearAndIntLumiFromDatacard
 
 if not 'CMSSW_VERSION' in os.environ:
@@ -90,6 +93,7 @@ def GetEOSPathWithFullURL(eosPath):
 def ConvertDatacardToWorkspace(datacard, mass):
     workspaceFileName = datacard+".m{}.root".format(mass)
     cmd = 'text2workspace.py --channel-masks -m {} {} -o {} '.format(mass, datacard, workspaceFileName)
+    #cmd += " --X-assign-flatParam-prior"
     RunCommand(cmd)
     return Path(workspaceFileName).resolve()
 
@@ -290,7 +294,7 @@ def WriteCondorSubFile(condorDir, filename, shFilename, nJobs, queue="workday", 
         # subfile.write('transfer_output_remaps = "combine_logger.out=out/' + basename + '.$(ClusterId).$(ProcId).combine_logger.out"\n')
         subfile.write("\n")
         subfile.write("should_transfer_files = YES\n")
-        if not options.cmsConnectMode:
+        if (not options.cmsConnectMode) and (not options.doGoF):
             subfile.write("when_to_transfer_output = ON_EXIT\n")
             subfile.write("output_destination = "+eosDir+"/"+baseDir+"/"+parentDir+"/\n")
             subfile.write("MY.XRDCP_CREATE_DIR = True\n")
@@ -339,6 +343,11 @@ def WriteCondorShFile(condorDir, filename, mass, combineCmds=[], limitCmds=[], s
             shfile.write("eval `scramv1 runtime -sh`\n")
             shfile.write("cd -\n")
         shfile.write("\n")
+        if options.doGoF:
+            for cmd in combineCmds:
+                shfile.write(cmd + "\n")
+            return
+        
         rootFileString = ""
         sigSFRound = round(signalScaleFactor, 6)
         if betaIndex != -1:
@@ -349,9 +358,9 @@ def WriteCondorShFile(condorDir, filename, mass, combineCmds=[], limitCmds=[], s
                 rMin = -1
                 rMax = -1
                 if quantile != -1 and not options.doSignificance:
-                   rMin, rMax = GetRMinAndRMax(mass, quantile, signalScaleFactor)
-                if quantile == -2: #Observed limit
-                    rMin, rMax = GetRMinAndRMax(mass, 0.5, signalScaleFactor)
+                    rMin, rMax = GetRMinAndRMax(mass, quantile, signalScaleFactor)
+                elif quantile == -1 and not options.estimateRValueScanRange and not options.doSignificance: #Observed limit
+                    rMin, rMax = GetRMinAndRMax(mass, -1.0, signalScaleFactor)
                 if rMin > 0 and rMax > 0:
                     shfile.write("if [ $1 -eq {} ]; then\n".format(jobIdx))
                     if quantile < 0.2 and quantile > 0:
@@ -363,7 +372,7 @@ def WriteCondorShFile(condorDir, filename, mass, combineCmds=[], limitCmds=[], s
                     if gridScanPoints < pointsPerJob:
                         pointsPerJob = gridScanPoints
                     scanPoints = np.linspace(rMin, rMax, num=gridScanPoints)
-                    # print("INFO: Writing commands to compute grid of {} limits in the range r=[{}, {}] by steps of {} for quantile {}".format(gridScanPoints, rMin, rMax, stepSize, quantile))
+                    print("INFO: Writing commands to compute grid of {} limits in the range r=[{}, {}] by steps of {} for quantile {}".format(gridScanPoints, rMin, rMax, stepSize, quantile))
                     for rValIdx, rVal in enumerate(scanPoints):
                         thisStepCmd = combineCmds[idx]
                         thisStepCmd += ' -n .signalScaleFactor{}.POINT.{}'.format(sigSFRound, rVal)
@@ -465,7 +474,7 @@ def GetHybridNewCommandArgs(workspace, mass, dirName, quantiles, genAsimovToyFil
             if quantile>0:
                 rMin, rMax = GetRMinAndRMax(mass, quantile, signalScaleFactor)
             else:
-                rMin, rMax = GetRMinAndRMax(mass, 0.5, signalScaleFactor)
+                rMin, rMax = GetRMinAndRMax(mass, -1.0, signalScaleFactor)
             rMin*=0.9
             rMax*=1.1
         else:
@@ -486,6 +495,7 @@ def GetHybridNewCommandArgs(workspace, mass, dirName, quantiles, genAsimovToyFil
             cmd += ' --LHCmode LHC-significance'
         else:
             cmd += ' --LHCmode LHC-limits'
+            #cmd += " --generateNuisances=1 --generateExternalMeasurements=0 --testStat LHC --fitNuisances 1"
         cmd += ' --saveHybridResult'
         cmd += ' --saveToys'
         cmd += ' --seed -1'
@@ -499,6 +509,7 @@ def GetHybridNewCommandArgs(workspace, mass, dirName, quantiles, genAsimovToyFil
             cmd += ' --rMax {}'.format(rMax)
         cmd += ' -T {}'.format(toys)
         cmd += ' -m {}'.format(mass)
+        cmd += " --fullBToys "
         if not batch:
             cmd += ' -n .signalScaleFactor{}'.format(round(signalScaleFactor, 6))
         # cmd += ' -H AsymptoticLimits'
@@ -522,16 +533,19 @@ def GetRMinAndRMax(mass, quantileExp, signalScaleFactor=1.0, betaId = -1):
     #print("starting rvalue = {} for quantile {} and mass{}".format(rValuesByMassAndQuantile[str(mass)][str(quantileExp)], quantileExp, mass))
     if betaId < 0:# or rescaleSignal:
         rValuesByQuantile = rValuesByMassAndQuantile[str(mass)]
-        if quantileExp == 0.025 and mass > 800 and mass <=2000: # adjust scan range upwards for lowest quantile and higher masses
+        if quantileExp == 0.025 and mass > 800 and mass <=1500: # adjust scan range upwards for lowest quantile and higher masses
             rMax = rValuesByQuantile[str(quantileExp)]*2.5
             rMin = rValuesByQuantile[str(quantileExp)]*1.25
+        elif quantileExp == 0.025 and mass > 1500 and mass <= 2000:
+            rMax = rValuesByQuantile[str(quantileExp)]*3
+            rMin = rValuesByQuantile[str(quantileExp)]*1.75
         #elif quantileExp == 0.025 and mass > 1000 and mass < 2000:
          #   rMax = rValuesByQuantile[str(quantileExp)]*3.5
           #  rMin = rValuesByQuantile[str(quantileExp)]*2.25
         elif quantileExp == 0.16 and mass > 1000 and mass <2000:
             rMax = rValuesByQuantile[str(quantileExp)]*2.0
             rMin = rValuesByQuantile[str(quantileExp)]*1.0
-        elif quantileExp == 0.975 and mass > 1500:  # adjust scan range downwards here
+        elif quantileExp == 0.975 and mass > 1100:  # adjust scan range downwards here
              rMax = rValuesByQuantile[str(quantileExp)]*1.0
              rMin = rValuesByQuantile[str(quantileExp)]*0.45
         elif (quantileExp == 0.025 or quantileExp==0.16) and mass >=2000 and mass <2500:
@@ -546,6 +560,9 @@ def GetRMinAndRMax(mass, quantileExp, signalScaleFactor=1.0, betaId = -1):
         elif quantileExp==0.5 and mass >= 2800:
             rMax = rValuesByQuantile[str(quantileExp)]*2
             rMin = rValuesByQuantile[str(quantileExp)]*1
+        elif quantileExp == -1.0 and mass >= 2400:
+            rMax = rValuesByQuantile[str(quantileExp)]*1.8
+            rMin = rValuesByQuantile[str(quantileExp)]*1.0
         else:
             rMax = rValuesByQuantile[str(quantileExp)]*1.3
             rMin = rValuesByQuantile[str(quantileExp)]*0.75
@@ -839,6 +856,7 @@ def GetComputeLimitsFromGridCommand(workspace, mass, filename, quantiles, signal
             cmd += ' --rMin {}'.format(rMin)
             cmd += ' --rMax {}'.format(rMax)
             cmd += ' --LHCmode LHC-limits'
+            #cmd += " --generateNuisances=1 --generateExternalMeasurements=0 --testStat LHC"
             if len(filename):
                 cmd += ' --grid={}'.format(filename)
             else:
@@ -1566,7 +1584,7 @@ def InitCardsAndWorkspaces(dirName):
 
 # http://cms-analysis.github.io/HiggsAnalysis-CombinedLimit/part3/nonstandard/#nuisance-parameter-impacts
 def MakeImpacts(workspace, mass, dirName, signalScaleFactor, asimovData=False, signal=False):
-    impactsDir = dirName.strip("/")+"/impacts"
+    impactsDir = dirName.strip("/")+"/impactsTest"
     if not os.path.isdir(impactsDir):
         print("INFO: Making directory", impactsDir, flush=True)
         Path(impactsDir).mkdir()
@@ -1589,40 +1607,66 @@ def MakeImpacts(workspace, mass, dirName, signalScaleFactor, asimovData=False, s
         #signalScaleFactor = signalScaleFactor * 10
         #if signalScaleFactor <=1.0:
         #    signalScaleFactor = 1.0
+        #signalScaleFactor = 0.1
         task_id = progress.add_task("[cyan]Making impact plots for LQ{}".format(mass), total=5)
-        rMin = -1
-        if mass==3000:
-            rMin = -5
-            #signalScaleFactor *= 3
-        rMax = 5
+        toySigStrength = 1 #-0.155#-0.42/(0.1*6.96)
+        if asimovData:
+            rMin = -1
+            rMax = 2
+        else:
+            if mass in [1500,1600,2400,2500] or mass >= 2700:
+                rMin = 0
+                rMax = 0.0001
+            elif mass==1300 or mass==1400 or mass==2600:
+                rMin = 0
+                rMax = 0.001
+            else:
+                rMin = -1
+                rMax = 2
+            if mass==2100: 
+                rMin=0
+        #if mass == 1200:
+        #    rMin = -5
+        #    rMax = 5
+        options = ""
+        #if mass in [1300,1400,1500,1600] or mass >=2400:
+            #masses that had r~=0 in the last run
+            #options = " --cminDefaultMinimizerType GSLMultiMin --cminDefaultMinimizerAlgo SteepestDescent"
+        #    if mass == 1200:
+        #        options += " --squareDistPoiStep"
         print("INFO: Use rMin = {}".format(rMin))
         stepSize = 0.2
         combToolCmd = "combineTool.py -v3"
-        cmd = combToolCmd + " -M Impacts -d {} -m {} --doInitialFit --robustFit 1 --rMin {}".format(workspace, mass, rMin, rMax)
+        cmd = combToolCmd + " -M Impacts -d {} -m {} --doInitialFit --rMin {} --robustFit 1".format(workspace, mass, rMin, rMax)
         #cmd += " --cminDefaultMinimizerType GSLMultiMin --cminDefaultMinimizerAlgo SteepestDescent "
-    #    cmd += " --cminDefaultMinimizerStrategy 1 --cminFallbackAlgo Minuit2,Migrad,0:0.1 --cminFallbackAlgo Minuit2,Migrad,1:1.0 --cminFallbackAlgo Minuit2,Migrad,0:1.0 --X-rtd MINIMIZER_MaxCalls=999999999 --X-rtd MINIMIZER_analytic --X-rtd FAST_VERTICAL_MORPH"
-        cmd += " --rMax 3"
-        cmd += " --keepFailures "
+        #cmd += " --cminDefaultMinimizerStrategy 1 --cminFallbackAlgo Minuit2,Migrad,0:0.1 --cminFallbackAlgo Minuit2,Migrad,1:1.0 --cminFallbackAlgo Minuit2,Migrad,0:1.0 --X-rtd MINIMIZER_MaxCalls=999999999 --X-rtd MINIMIZER_analytic --X-rtd FAST_VERTICAL_MORPH"
+        cmd += options
+        cmd += " --rMax {}".format(rMax)
+     #   cmd += " --robustHesse 1 "
+        #cmd += " --keepFailures "
         if asimovData:
             cmd += " -t -1"
             if signal:
-                cmd += " --expectSignal 1"
+                cmd += " --expectSignal {}".format(toySigStrength)
         cmd += commonCombineArgs.format(signalScaleFactor)
         print(cmd)
         RunCommand(cmd, impactsDir, None, True)
         if os.path.isfile(impactsDir+"/combine_logger.out"):
             shutil.copy(impactsDir+"/combine_logger.out", impactsDir+"/combine_logger_initialFit{}.out".format(mass))
         progress.update(task_id, advance=1)
-        cmd = combToolCmd + " -M Impacts -d {} -m {} --robustFit 1 --doFits --parallel 4 --rMin {}".format(workspace, mass, rMin, rMax)
+        cmd = combToolCmd + " -M Impacts -d {} -m {} --doFits --parallel 4 --rMin {} --robustFit 1".format(workspace, mass, rMin, rMax)
         #cmd += " --cminDefaultMinimizerType GSLMultiMin --cminDefaultMinimizerAlgo SteepestDescent "
-        cmd+=" --rMax 3"
+        cmd+=" --rMax {}".format(rMax)
+     #   cmd += " --robustHesse 1 "
         #cmd += " --keepFailures "
         #cmd += " --cminDefaultMinimizerStrategy 1 --cminFallbackAlgo Minuit2,Migrad,0:0.1 --cminFallbackAlgo Minuit2,Migrad,1:1.0 --cminFallbackAlgo Minuit2,Migrad,0:1.0 --X-rtd MINIMIZER_MaxCalls=999999999 --X-rtd MINIMIZER_analytic --X-rtd FAST_VERTICAL_MORPH"
+        cmd += options
         if asimovData:
             cmd += " -t -1"
             if signal:
-                cmd +=" --expectSignal 1"
+                cmd +=" --expectSignal {}".format(toySigStrength)
         cmd += commonCombineArgs.format(signalScaleFactor)
+        print(cmd)
         RunCommand(cmd, impactsDir, None, True)
         if os.path.isfile(impactsDir+"/combine_logger.out"):
             shutil.copy(impactsDir+"/combine_logger.out", impactsDir+"/combine_logger_doFits{}.out".format(mass))
@@ -1631,35 +1675,479 @@ def MakeImpacts(workspace, mass, dirName, signalScaleFactor, asimovData=False, s
         if asimovData:
             cmd += " -t -1"
             if signal:
-                cmd += " --expectSignal 1"
+                cmd += " --expectSignal {}".format(toySigStrength)
         cmd += commonCombineArgs.format(signalScaleFactor)
         RunCommand(cmd, impactsDir, None, True)
         if os.path.isfile(impactsDir+"/combine_logger.out"):
             shutil.copy(impactsDir+"/combine_logger.out", impactsDir+"/combine_logger_makeJson{}.out".format(mass))
         progress.update(task_id, advance=1)
-        cmd = "plotImpacts.py --summary -i impacts.m{}.json -o impacts.m{}".format(mass, mass)
-        if not asimovData:
-            cmd += " --blind"
-        RunCommand(cmd, impactsDir, None, True)
+        cmd = "/afs/cern.ch/user/e/eipearso/public/leptoquark_analysis/CMSSW_14_1_0_pre4/src/LQLimitsCMSSW/plotImpacts_copy.py --summary -i impacts.m{}.json -o impacts.m{}".format(mass, mass)
+        #if not asimovData:
+        #    cmd += " --blind"
+        RunCommand(cmd, impactsDir, None, False)
         progress.update(task_id, advance=1)
 
-        cmd = "combine -M MultiDimFit {} --algo grid --saveFitResult --rMin {} --points=1000 --mass {} -v2".format(workspace, rMin, mass)
-        cmd += " --cminDefaultMinimizerStrategy 1 --cminFallbackAlgo Minuit2,Migrad,0:0.1 --cminFallbackAlgo Minuit2,Migrad,1:1.0 --cminFallbackAlgo Minuit2,Migrad,0:1.0 --X-rtd MINIMIZER_MaxCalls=999999999 --X-rtd MINIMIZER_analytic --X-rtd FAST_VERTICAL_MORPH"
-        cmd+=" --rMax 3"
+        cmd = "combine -M MultiDimFit {} --algo grid --saveFitResult --rMin {} --points=100 --mass {} -v2 --robustFit 1".format(workspace, rMin, mass)
+        #cmd += " --cminDefaultMinimizerStrategy 1 --cminFallbackAlgo Minuit2,Migrad,0:0.1 --cminFallbackAlgo Minuit2,Migrad,1:1.0 --cminFallbackAlgo Minuit2,Migrad,0:1.0 --X-rtd MINIMIZER_MaxCalls=999999999 --X-rtd MINIMIZER_analytic --X-rtd FAST_VERTICAL_MORPH"
+        cmd += options
+        cmd+=" --rMax {}".format(rMax)
         if asimovData:
             cmd += " -t -1"
             if signal:
-                cmd += " --expectSignal 1"
+                cmd += " --expectSignal {}".format(toySigStrength)
         cmd += commonCombineArgs.format(signalScaleFactor)
-        RunCommand(cmd, impactsDir, None, True)
-
-        cmd = "/afs/cern.ch/user/e/eipearso/public/leptoquark_analysis/CMSSW_14_1_0_pre4/src/HiggsAnalysis/CombinedLimit/scripts/plot1DScan.py higgsCombineTest.MultiDimFit.mH{}.root -o likelihoodScan_LQ{}".format(mass,mass)
-        RunCommand(cmd, impactsDir, None, True)
+        try:
+            RunCommand(cmd, impactsDir, None, True)
+            cmd = "/afs/cern.ch/user/e/eipearso/public/leptoquark_analysis/CMSSW_14_1_0_pre4/src/HiggsAnalysis/CombinedLimit/scripts/plot1DScan.py higgsCombineTest.MultiDimFit.mH{}.root -o likelihoodScan_LQ{}".format(mass,mass)
+            RunCommand(cmd, impactsDir, None, True)
+        except Exception as e:
+            print("WARNING: likelihood scan failed for mass {} with the following error message. Continuing with the rest of the impact plots.".format(mass))
+            print(e)
         progress.update(task_id, advance=1)
         if os.path.isfile(impactsDir+"/combine_logger.out"):
             shutil.copy(impactsDir+"/combine_logger.out", impactsDir+"/combine_logger_likelihoodScan{}.out".format(mass))
 
+def GetNuisancesFromDatacard(datacard):
+    with open(datacard,'r') as f:
+        lines = f.readlines()
+    years = []
+    processNames = []
+    nuisances = {}
+    paramNames = []
+    for line in lines:
+        if line.startswith("bin"):
+            bins = line.split()
+            for ibin,b in enumerate(bins):
+                if (not ibin==0) and (not b in years):
+                    years.append(b)
+                    nuisances[b] = {}
+            continue
+        if line.startswith("process"):
+            names = line.split()
+            for iname,name in enumerate(names):
+                if (not iname==0) and (not name in processNames) and not (name.isnumeric()):
+                    processNames.append(name)
+            continue
+        if "lnN" in line:
+            paramName = line.split()[0]
+            paramNames.append(paramName)
+            values = line.split()[2:]
+            #print(processNames)
+            #print(years)
+            for iyear,year in enumerate(years):
+                nuisances[year][paramName] = {}
+                totBkgThisYear = 0
+                for iproc,process in enumerate(processNames):
+                    idx = iyear*len(processNames) + iproc
+                    #print(idx,",",len(values))
+                    if values[idx] == "-":
+                        valToUse = 0
+                    else:
+                        valToUse = abs(float(values[idx]) - 1)
+                        if not "LQ" in process:
+                            totBkgThisYear += float(valToUse) ** 2
+                    nuisances[year][paramName][process] = valToUse
+                nuisances[year][paramName]['totalBkg'] = math.sqrt(totBkgThisYear)
+    return nuisances, years, paramNames, processNames
+
+def PrintDatacardDiff(oldCard, newCard):
+    nuisances_old, years_old, params_old, processes_old = GetNuisancesFromDatacard(oldCard)
+    nuisances_new, years_new, params_new, processes_new = GetNuisancesFromDatacard(newCard)
+    nuisances_old = nuisances_old["bin1"]
+    nuisances_new = nuisances_new["bin1"]
+
+    #if params_old == params_new: #Names haven't changed
+    #    for param in params_old:
+
+
+def RoundToSigFigs(num, nSigFigs):
+    numStr = "{:e}".format(num)
+    powerOfTen = int(numStr.split('e')[1])
+    nDecimals = int(-1*powerOfTen + nSigFigs -1)
+    print(num, powerOfTen, nDecimals) 
+    numRounded = round(num,nDecimals)
+    return numRounded
+
+def MakeTableRow(mlq, sampleList, year, yieldDict, fitType):
+    row = "$ "+str(mlq) + "$ & $"
+    for sample in sampleList:
+        evtYield = yieldDict[str(mlq)][sample][fitType][year]["yield"]
+        totErr = yieldDict[str(mlq)][sample][fitType][year]["totErr"]
+        statErr = yieldDict[str(mlq)][sample][fitType][year]["statErr"]
+        systErr = yieldDict[str(mlq)][sample][fitType][year]["systErr"]
+        #print(sample,totErr,statErr,systErr)
+        if "total" in sample:
+            entry = GetTableEntryStr(evtYield, statErr, statErr, systErr, False, True)
+            print(entry)
+        elif "data" in sample:
+            #print("evtYield for data = ",evtYield)
+            if evtYield <1:
+                evtYield = 0.0
+            entry = GetTableEntryStr(evtYield, 0, 0, 0, False, True)
+            if ".00" in entry:
+                entry = entry.replace(".00",".0")
+            #entry = GetTableEntryStr(evtYield, "-", "-", 0, False, True)
+            print("DATA "+str(evtYield))
+        else:
+            entry = GetTableEntryStr(evtYield, totErr, totErr, 0, False, True)
+            #if "\\pm 0.010" in entry:
+            #    entry = entry.replace("\\pm 0.010","\\pm 0.01")
+        
+        centralValue = float(entry.split()[0])
+        if len(entry.split("\\pm")) > 1:
+            uncertainty = entry.split("\\pm")[1]
+        else:
+            uncertainty = " "
+        if centralValue > 0 and centralValue < 1e-6:
+            entry = "< 1\\times 10^{-6}"
+        elif centralValue < 0:
+            entry = "0 \\pm " + uncertainty
+        row += entry
+
+        if sample == sampleList[-1]:
+            row += " $\\\\"
+        else:
+            row += "$ & $"
+    return row
+
+def MakeTableRowSimpleRounding(mlq, sampleList, year, yieldDict, fitType):
+    row = "$ "+str(mlq) + "$ "
+    for sample in sampleList:
+        evtYield = round(yieldDict[str(mlq)][sample][fitType][year]["yield"],2)
+        totErr = round(yieldDict[str(mlq)][sample][fitType][year]["totErr"],2)
+        statErr = round(yieldDict[str(mlq)][sample][fitType][year]["statErr"], 2)
+        systErr = round(yieldDict[str(mlq)][sample][fitType][year]["systErr"], 2)
+
+        if "total" in sample:
+            row += " & ${} \\pm {} \\pm {}$".format(evtYield,statErr,systErr)
+        elif "data" in sample:
+            row += " & ${}$".format(int(evtYield))
+        else:
+            row += " & ${} \\pm {}$".format(evtYield,totErr)
+    row += " \\\\"
+    return row
+
+def MakeTableRowPDGRules(mlq, sampleList, year, yieldDict, fitType):
+    row = "$ "+str(mlq) + "$ "
+    for sample in sampleList:
+        evtYield = yieldDict[str(mlq)][sample][fitType][year]["yield"]
+        if (evtYield <= 1e-6) and (evtYield > 0) and (not fitType=="fit_b") and ("lq" in sample.lower()) :
+            row += "& $< 1\\times 10^{-6}$"
+            continue
+        if evtYield < 0:
+            evtYield = 0
+        totErr, totErrRoundTo = RoundError(yieldDict[str(mlq)][sample][fitType][year]["totErr"])
+        statErr, statErrRoundTo = RoundError(yieldDict[str(mlq)][sample][fitType][year]["statErr"])
+        systErr, systErrRoundTo = RoundError(yieldDict[str(mlq)][sample][fitType][year]["systErr"])
+        if totErr < 0.01:
+            #Round to 1st nonzero digit
+            digit, nDecimals = FindFirstNonzero(evtYield)
+            evtYieldRounded = round(evtYield, nDecimals)
+            yieldStr = f"{evtYieldRounded:{nDecimals/10}f}"
+            row += "& $"+yieldStr+"$ "
+            continue
+
+        if "data" in sample:
+            row += " & ${}$".format(int(evtYield))
+        elif "total" in sample:
+            roundTo = max(statErrRoundTo, systErrRoundTo)
+            evtYieldRounded = round(evtYield, roundTo)
+
+            if statErr >=0.95 or systErr >=0.95:
+                evtYieldRounded = int(evtYieldRounded)
+            if statErr >= 0.95:
+                statErr = int(statErr)
+            if systErr >= 0.95:
+                systErr = int(systErr)
+            #row += " & ${} \\pm {} \\pm {}$".format(evtYieldRounded,statErr,systErr)
+            if roundTo >= 1:
+                yieldStr = f"{evtYieldRounded:{roundTo/10}f}"
+                statErrStr = f"{statErr:{statErrRoundTo/10}f}"
+                systErrStr = f"{systErr:{systErrRoundTo/10}f}"
+            else:
+                yieldStr = str(evtYieldRounded)
+                statErrStr = str(statErr)
+                systErrStr = str(systErr)
+            row += "& $" + yieldStr + " \\pm " + statErrStr + " \\pm " + systErrStr + "$"
+        else:
+            evtYieldRounded = round(evtYield,totErrRoundTo)
+            #print(evtYieldRounded, totErr)
+            #totErrRoundTo += 2
+            if totErr >= 0.95:
+                evtYieldRounded = int(evtYieldRounded)
+                totErr = int(totErr)
+            if totErrRoundTo >= 1:
+                yieldStr = f"{evtYieldRounded:{totErrRoundTo/10}f}"
+                errStr = f"{totErr:{totErrRoundTo/10}f}"
+            else:
+                yieldStr = str(evtYieldRounded)
+                errStr = str(totErr)
+            
+            row += "& $" + yieldStr + " \\pm " + errStr + "$"
+            print(row)
+            #row += " & ${} \\pm {}$".format(evtYieldRounded, totErr)
+    row += " \\\\"
+    return row
+
+
+def FindFirstNonzero(number):
+    afterDecimal = str(number).replace("0.","")
+    digits = list(afterDecimal)
+    #print(digits)
+    posFirstNonzero = -1
+    firstNonzero = -1
+    for pos,d in enumerate(digits):
+        #print(pos,d)
+        if not d=='0':
+            #print("found nonzero digit {} at position {}".format(pos,d))
+            posFirstNonzero = pos + 1
+            firstNonzero = d
+            break
+    return firstNonzero, posFirstNonzero
+
+def FindDistanceToDecimal(number):
+    beforeDecimal = str(number).split(".")[0]
+    distToDecimal = len(beforeDecimal) - 1
+    #e.g. if I want to round 345 to 300, I would need round(345, -2) 
+    return distToDecimal
+
+def RoundError(err):
+    if err < 1:
+        #starts with 0.
+        firstDigit, roundTo = FindFirstNonzero(err)
+        err1SF = round(err,roundTo)
+        #print(err1SF)
+        err2SF = round(err,roundTo + 1)
+        #print(err2SF)
+        err1SFDigit, pos = FindFirstNonzero(err1SF)
+        if pos < roundTo:
+            roundTo -= 1
+
+    else:
+        #err is >= 1
+        distToDecimal = FindDistanceToDecimal(err)
+        roundTo = distToDecimal * -1
+        err1SF = round(err, roundTo)
+        err2SF = round(err, roundTo + 1)
+        err1SFDigit = list(str(err1SF))[0]
+
+    print("1st digit = {} for number {}. Round to = {}".format(err1SFDigit, err, roundTo))
+    #if int(err1SFDigit) > 3:
+    if roundTo==0:
+        err1SF = int(err1SF)
+    return err1SF, roundTo
+    #else:
+    #    return err2SF, roundTo + 1
+
+def CheckForFitFailure(filename="combine_logger.out",errMsg="Initial minimization failed"):
+    print("Check for fit failure with file {} and msg {}".format(filename, errMsg))
+    f = open(filename,"r")
+    lines = f.readlines()
+    #print(lines)
+    f.close()
+    failed = False
+    for l in lines:
+        #print(l)
+        if errMsg in l:
+            print("INFO: Found text \" {} \" in file {}, assume fit failed.".format(errMsg, filename))
+            failed = True
+            break
+    return failed 
+
+def CheckMultiDimFit(rootFile):
+    tfile = TFile.Open(rootFile)
+    tree = tfile.Get("limit")
+    if tree.GetEntries() > 0:
+        return True
+    else: 
+        return False
+
+def PreAndPostFitComparison(datacard, mass, dirName, signalScaleFactor, yieldDict,tableOnly):
+    #signalScaleFactor = 0.0013
+    yieldDict[str(mass)] = {}
+    options = ""
+
+    if not os.path.isdir(dirName.strip("/")+"/preAndPostFit_test"):
+        Path(dirName.strip("/")+"/preAndPostFit_test").mkdir()
+    plotsDir = str(dirName.strip("/")+"/preAndPostFit_test/{}".format(mass))
+    if not os.path.isdir(plotsDir):
+        Path(plotsDir).mkdir()
+
+    nuisances, years, nuisanceParamNames, bkgSamples = GetNuisancesFromDatacard(datacard)
+
+    nuisanceParamsList = ""
+    for name in nuisanceParamNames:
+    #    if "prop" in name:
+        nuisanceParamsList += ","+name
+
+    if mass in [1500,1600,2400,2500] or mass >= 2700:
+        rMin = 0
+        rMax_s = 0.0001
+    elif mass==1300 or mass==1400 or mass==2600:
+        rMin = 0
+        rMax_s = 0.001
+    else:
+        rMin = -1
+        rMax_s = 2
+    if mass==2100: 
+        rMin=0
+    rMax_b = 2
+    fitTypes = ["fit_b", "fit_s"]
+    if not tableOnly:
+        cmd = "combine -M MultiDimFit {} -v3 -m {} -n .m{}.fit_b --rMin {} --rMax {} --robustFit 1 --saveWorkspace ".format(datacard+".m{}.root".format(mass), mass, mass, rMin, rMax_b)
+        cmd+= " --setParameters r=0,signalScaleParam={} --trackParameters signalScaleParam --freezeParameters signalScaleParam,r".format(signalScaleFactor)
+        print(cmd)
+        RunCommand(cmd, plotsDir, None, False)
+        bOnlyFitGood = CheckMultiDimFit(plotsDir+"/higgsCombine.m{}.fit_b.MultiDimFit.mH{}.root".format(mass,mass))
+        if not bOnlyFitGood:
+            raise RuntimeError("bOnly MultiDimFit fit failed for mass {}".format(mass))
+
+        cmd = "combine -M MultiDimFit {} -v3 -m {} -n .m{}.fit_s --rMin {} --rMax {} --robustFit 1 --saveWorkspace ".format(datacard+".m{}.root".format(mass), mass, mass, rMin, rMax_s)
+        cmd+= commonCombineArgs.format(signalScaleFactor)
+        print(cmd)
+        RunCommand(cmd, plotsDir, None, False)
+        sbFitGood = CheckMultiDimFit(plotsDir+"/higgsCombine.m{}.fit_s.MultiDimFit.mH{}.root".format(mass,mass))
+        if not sbFitGood:
+            raise RuntimeError("s+b MultiDimFit fit failed for mass {}".format(mass))
+
+        cmdClean = "combine -M FitDiagnostics higgsCombine.m{}.fit_b.MultiDimFit.mH{}.root -m {} --name .m{} --robustFit 1 -v2 --rMin {} --skipSBFit --rMax {} --saveShapes --saveNormalizations --saveWithUncertainties --saveOverallShapes --snapshotName MultiDimFit".format(mass, mass, mass, mass, rMin, rMax_b)
+        cmdClean += commonCombineArgs.format(signalScaleFactor)
+        print(cmdClean)
+        RunCommand(cmdClean, plotsDir, None, False)
+
+        for fit in fitTypes:
+            if fit == "fit_b":
+                rMax = rMax_b
+            else:
+                rMax = rMax_s
+            workspace = "higgsCombine.m{}.{}.MultiDimFit.mH{}.root".format(mass,fit, mass)
+
+            cmdAllFloat = "combine -M FitDiagnostics {} -m {} --name .m{}.allFloating.{} --robustFit 1 -v2 --rMin {} --rMax {} --saveShapes --saveNormalizations --saveWithUncertainties --saveOverallShapes --snapshotName MultiDimFit".format(workspace, mass, mass, fit, rMin, rMax)
+            cmdAllFloat += commonCombineArgs.format(signalScaleFactor)
+            cmdAllFloat += " --bypassFrequentistFit"
+
+            cmdFreezeSyst = "combine -M FitDiagnostics {} -m {} -n .m{}.freezeSysts.{} --rMin {} --rMax {}  --saveShapes --saveNormalizations --saveWithUncertainties --saveOverallShapes --robustFit 1 --snapshotName MultiDimFit --freezeNuisanceGroup systs -v2".format(workspace, mass, mass, fit, rMin, rMax)
+            cmdFreezeSyst += commonCombineArgs.format(signalScaleFactor)
+            cmdFreezeSyst += " --bypassFrequentistFit"
     
+            if fit=="fit_b":
+                cmdFreezeSyst += " --skipSBFit"
+                cmdAllFloat += " --skipSBFit"
+            else:
+                cmdFreezeSyst += " --skipBOnlyFit"
+                cmdAllFloat += " --skipBOnlyFit"
+
+            print(cmdAllFloat)
+            RunCommand(cmdAllFloat, plotsDir, None, False)
+            copyCmd = "cp combine_logger.out combine_logger_allFloat_{}.out".format(fit)
+            RunCommand(copyCmd, plotsDir, None, False)
+            allFloatFailed = CheckForFitFailure(filename=plotsDir+"/combine_logger_allFloat_{}.out".format(fit))
+
+            print(cmdFreezeSyst)
+            RunCommand(cmdFreezeSyst, plotsDir, None, False)
+            freezeSystFailed = CheckForFitFailure()
+            copyCmd = "cp combine_logger.out combine_logger_freezeSyst_{}.out".format(fit)
+            RunCommand(copyCmd, plotsDir, None, False)
+            allFloatFailed = CheckForFitFailure(filename=plotsDir+"/combine_logger_freezeSyst_{}.out".format(fit))
+
+            if allFloatFailed or freezeSystFailed:
+                print("INFO: FitDiagnostics failed for mass {}. Trying again with option --X-rtd MINIMIZER_no_analytic".format(mass))
+                cmdAllFloat += " --X-rtd MINIMIZER_no_analytic "
+                cmdFreezeSyst += " --X-rtd MINIMIZER_no_analytic "
+                print(cmdAllFloat)
+                RunCommand(cmdAllFloat, plotsDir, None, False)
+                print(cmdFreezeSyst)
+                RunCommand(cmdFreezeSyst, plotsDir, None, False)
+    
+    totErrFile = plotsDir+"/fitDiagnostics.m{}.allFloating.{}.root"
+    freezeSystFile = plotsDir+"/fitDiagnostics.m{}.freezeSysts.{}.root"
+    cleanFile = plotsDir+"/fitDiagnostics.m{}.root"
+    #tfileTot = TFile.Open(totErrFile)
+    for fitType in fitTypes:
+        tfileTot = TFile.Open(totErrFile.format(mass,fitType))
+        for sample in bkgSamples + ["total_background","LQ_M{}".format(mass), "data"]:
+            if not sample in yieldDict[str(mass)].keys():
+                yieldDict[str(mass)][sample] = {}
+            fullRunIIYield = 0
+            fullRunIITotErr = 0
+            yieldDict[str(mass)][sample][fitType] = {}
+            #yieldDict[str(mass)][sample][fitType]["fullRunII"] = {}
+            for year in years:
+                yieldDict[str(mass)][sample][fitType][year] = {}
+                yieldHist = tfileTot.Get("shapes_{}/{}/{}".format(fitType,year,sample))
+                #print("Get hist shapes_{}/{}/{}".format(fitType,year,sample))
+                if sample == "data":
+                    yieldDict[str(mass)][sample][fitType][year]["yield"] = yieldHist.GetPointY(0)
+                    yieldDict[str(mass)][sample][fitType][year]["totErr"] = yieldHist.GetErrorY(0)
+                else:
+                    #if "LQ" in sample:
+                    #    content = yieldHist.GetBinContent(1) / signalScaleFactor
+                    #    err = yieldHist.GetBinError(1) / signalScaleFactor
+                    #else:
+                    content = yieldHist.GetBinContent(1)
+                    err = yieldHist.GetBinError(1)
+                    yieldDict[str(mass)][sample][fitType][year]["yield"] = content
+                    yieldDict[str(mass)][sample][fitType][year]["totErr"] = err
+                fullRunIIYield += yieldDict[str(mass)][sample][fitType][year]["yield"]
+                fullRunIITotErr += (yieldDict[str(mass)][sample][fitType][year]["totErr"])**2
+            fullRunIITotErr = math.sqrt(fullRunIITotErr)
+            #yieldDict[str(mass)][sample][fitType]["fullRunII"]["yield"] = fullRunIIYield
+            #yieldDict[str(mass)][sample][fitType]["fullRunII"]["totErr"] = fullRunIITotErr
+    #print(yieldDict)
+    for fitType in fitTypes:
+        tfileStat = TFile.Open(freezeSystFile.format(mass,fitType))
+        for sample in bkgSamples + ["total_background","LQ_M{}".format(mass), "data"]:
+            fullRunIIStatErr = 0
+            #yieldDict[str(mass)][sample][fitType] = {}
+            for year in years:
+                #yieldDict[str(mass)][sample][fitType][year] = {}
+                yieldHist = tfileStat.Get("shapes_{}/{}/{}".format(fitType,year,sample))
+                #If we froze the systs, then the remaining err is the stat err
+                if sample == "data":
+                    yieldDict[str(mass)][sample][fitType][year]["statErr"] = yieldHist.GetErrorY(0)
+                else:
+                    yieldDict[str(mass)][sample][fitType][year]["statErr"] = yieldHist.GetBinError(1)
+            
+
+                totErr = yieldDict[str(mass)][sample][fitType][year]["totErr"]
+                statErr = yieldDict[str(mass)][sample][fitType][year]["statErr"]
+                #print(sample, year, totErr, statErr)
+                if statErr > totErr:
+                    statErr = totErr
+                #print(sample, year, totErr, statErr)
+                systErr = math.sqrt(totErr**2 - statErr**2)
+                fullRunIIStatErr += statErr**2
+                yieldDict[str(mass)][sample][fitType][year]["statErr"] = statErr
+                yieldDict[str(mass)][sample][fitType][year]["systErr"] = systErr
+
+            fullRunIIStatErr = math.sqrt(fullRunIIStatErr)
+            #yieldDict[str(mass)][sample][fitType]["fullRunII"]["statErr"] = fullRunIIStatErr
+            #totErr = yieldDict[str(mass)][sample][fitType]["fullRunII"]["totErr"]
+            systErr = math.sqrt(totErr**2 - fullRunIIStatErr**2)
+            #yieldDict[str(mass)][sample][fitType]["fullRunII"]["systErr"] = systErr
+    
+    tfileClean = TFile.Open(cleanFile.format(mass))
+    for sample in bkgSamples + ["total_background","LQ_M{}".format(mass), "data"]:
+        yieldDict[str(mass)][sample]["prefit"] = {}
+        for year in years:
+            yieldDict[str(mass)][sample]["prefit"][year] = {}
+            yieldHist = tfileClean.Get("shapes_prefit/{}/{}".format(year,sample))
+                #If we froze the systs, then the remaining err is the stat err
+            if sample == "data":
+                yieldDict[str(mass)][sample]["prefit"][year]["totErr"] = yieldHist.GetErrorY(0)
+                yieldDict[str(mass)][sample]["prefit"][year]["yield"] = yieldHist.GetPointY(0)
+            elif "LQ" in sample:
+                yieldDict[str(mass)][sample]["prefit"][year]["totErr"] = yieldHist.GetBinError(1)/signalScaleFactor
+                yieldDict[str(mass)][sample]["prefit"][year]["yield"] = yieldHist.GetBinContent(1)/signalScaleFactor
+            else:
+                yieldDict[str(mass)][sample]["prefit"][year]["totErr"] = yieldHist.GetBinError(1)
+                yieldDict[str(mass)][sample]["prefit"][year]["yield"] = yieldHist.GetBinContent(1)
+            yieldDict[str(mass)][sample]["prefit"][year]["statErr"] = yieldDict[str(mass)][sample]["prefit"][year]["totErr"] / math.sqrt(2)
+            yieldDict[str(mass)][sample]["prefit"][year]["systErr"] = yieldDict[str(mass)][sample]["prefit"][year]["totErr"] / math.sqrt(2)
+    #print(yieldDict)
+    
+    return yieldDict
+ 
 # https://twiki.cern.ch/twiki/bin/viewauth/CMS/HiggsWG/HiggsPAGPreapprovalChecks
 # but this implementation is not finished
 def DoPreapprovalChecks(workspace, mass, dirName, signalScaleFactor):
@@ -1675,6 +2163,45 @@ def DoPreapprovalChecks(workspace, mass, dirName, signalScaleFactor):
     cmd = "python3 " + diffNuisances + " -a fitDiagnostics.m{}.root -g plots_m{}.root".format(mass, mass)
 
     
+def WriteCondorFilesGoF(workspace,mass,dirname,nToys,sigSF,isSB=False):
+    if isSB:
+        fitType = "sb"
+    else:
+        fitType = "bOnly"
+    subFileName = dirname+"/condor_{}.sub".format(fitType)
+    shFileName = dirname+"/condor_{}.sh".format(fitType)
+
+    inputFileList = [workspace]
+    combineBin = shutil.which("combine")
+    inputFileList.append(combineBin)
+
+    nToysPerJob = 500
+    nJobs = nToys / nToysPerJob
+    WriteCondorSubFile(dirname,subFileName,Path(shFileName),nJobs,queue="workday",doGridGen=False,extractLimits=False,inputFiles=inputFileList)
+    
+    workspaceFilename = workspace.split("/")[-1]
+    cmdToys = "./combine -M GoodnessOfFit -d {} --algo=saturated -m {} -t {} -s -1 --toysFreq".format(workspaceFilename,mass,nToysPerJob)
+    if not isSB:
+        # options for b-only fit
+        cmdToys += " -n .toys_bOnly --freezeParameters r,signalScaleParam --setParameters r=0,signalScaleParam={}".format(sigSF)
+    else:
+        cmdToys += " -n .toys_sb "
+        cmdToys += " --freezeParameters signalScaleParam --setParameters signalScaleParam={} ".format(sigSF)
+    cmdToys += " --snapshotName MultiDimFit"
+    cmdToys += " --bypassFrequentistFit"
+    cmdToys += " --rMin -1 "
+    '''
+    cmdData = "./combine -M GoodnessOfFit -d {} --algo=saturated -m {} --toysFreq".format(workspace,mass)
+    if not isSB:
+        cmdData += " -n .data_bOnly --setParametersForFit mask_ch1=1 --setParametersForEval mask_ch1=0 --freezeParameters r,signalScaleParam --setParameters r=0,signalScaleParam={} ".format(sigSF)
+    else:
+        cmdData += " -n .data_sb "
+        cmdData += " --freezeParameters signalScaleParam --setParameters signalScaleParam={} ".format(sigSF)
+    '''
+    WriteCondorShFile(os.getenv("LQLIMITS")+"/"+dirname,shFileName,mass,[cmdToys])
+    
+    return
+    
 ####################################################################################################
 # Run
 ####################################################################################################
@@ -1685,22 +2212,22 @@ if __name__ == "__main__":
     gridScanPoints = 50
     doShapeBasedLimits = False
     doAsymptoticLimits = False
-    blinded = True
-    doObservedLimit = False
-    useAsimovData = True #do or don't use asimov data in place of real data
+    blinded = False
+    doObservedLimit = True
+    useAsimovData = False #do or don't use asimov data in place of real data
     #NOTE: if doObservedLimit==True and useAsimovData==True, combine will calculate the observed limit using asimov toys in place of real data
     ncores = 6
-    #massList = list(range(1400, 3100, 100))
     massList = list(range(300,3100, 100))
-    #massList = [2700,2800,2900,3000] #[1100,1200,1300,1400,1500,1600,1700,1800,1900,2000]
+    #massList = list(range(1300,3100,100))
+    #massList = [1200]#,1600,1700,1800]
     betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
     eosDir = "root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso"
     eosDirNoPrefix = eosDir[eosDir.rfind("//")+1:]
     
     quantilesExpected = [0.025, 0.16, 0.5, 0.84, 0.975]
-    #quantilesExpected = [0.5]
+    #quantilesExpected = [0.025,0.975]
     if doObservedLimit == True:
-        quantilesExpected.append(-2)
+        quantilesExpected.append(-1)
     xsThFilename = "$LQANA/config/xsection_theory_13TeV_scalarPairLQ.txt"
     #xsThFilename = "xsection_theory_13TeV_atlas.txt"
     sigRescaleFile = "rValues_nominal.json"
@@ -1854,6 +2381,30 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
     )
+    parser.add_option(
+        "--preAndPostFit",
+        dest="doPrePostFitComparison",
+        help="Make tables comparing pre and post fit yields for each bkg process for each year",
+        metavar="doPrePostFitComparison",
+        action="store_true",
+        default=False
+    )
+    parser.add_option(
+        "--GoF",
+        dest="doGoF",
+        help="Do goodness of fit test",
+        metavar="doGoF",
+        action="store_true",
+        default=False
+    )
+    parser.add_option(
+        "--collectGoF",
+        dest="collectGoF",
+        help="run combine's collect GoF script and make plots",
+        metavar="collectGoF",
+        action="store_true",
+        default=False
+    )
     (options, args) = parser.parse_args()
     if options.datacard is None and options.readResults is None:
         raise RuntimeError("Need either option d to specify datacard, or option r to specify reading limit results from batch")
@@ -1896,6 +2447,142 @@ if __name__ == "__main__":
     failedBatchCommands = []
     combinedDatacard = options.datacard
 
+    if options.doGoF:
+        print("INFO: Doing goodness of fit test...\n",flush=True,end='')
+        InitCardsAndWorkspaces(dirName)
+        datacardDir = dirName.strip("/")+"/datacards"
+        if not os.path.isdir(dirName.strip("/")+"/gofTest_snapshot"):
+            os.mkdir(dirName.strip("/")+"/gofTest_snapshot")
+        nToys=10000
+        for mass in massList:
+            dirThisMass = dirName.strip("/")+"/gofTest_snapshot/{}".format(mass)
+            if not os.path.isdir(dirThisMass):
+                os.mkdir(dirThisMass)
+            sigSF = sigRescaleFactors[str(mass)]['0.5']
+            print("INFO: For mass {} use scale factor {}".format(mass,sigSF))
+            datacard = str(FindCardWorkspace(datacardDir + "/*", mass))
+
+            if mass in [1300,1400,1500,1600] or mass >= 2400:
+                rMin = 0
+                rMax_s = 0.0001
+            else:
+                rMin = -1
+                rMax_s = 2
+            rMax_b = 2
+            #cmd = "combine -M MultiDimFit {} -v3 -m {} -n .m{}.fit_b --rMin {} --rMax {} --saveWorkspace ".format(datacard, mass, mass, rMin, rMax_b)
+            #cmd+= " --setParameters r=0,signalScaleParam={} --trackParameters signalScaleParam --freezeParameters signalScaleParam,r".format(sigSF)
+            #print(cmd)
+            #RunCommand(cmd, dirThisMass, None, False)
+            #signalScaleFactor = 0.0013
+            #cmd = "combine -M MultiDimFit {} -v3 -m {} -n .m{}.fit_s --rMin {} --rMax {} --saveWorkspace ".format(datacard, mass, mass, rMin, rMax_s)
+            #cmd+= commonCombineArgs.format(sigSF)
+            #RunCommand(cmd, dirThisMass, None, False)
+
+            sigSF = 1.0
+            print("INFO: Do fit to data...")
+            for fitType in ["bOnly","sb"]:
+                postFitDir = dirName+"/preAndPostFit_test/{}".format(mass)
+                if fitType == "bOnly":
+                    workspace = postFitDir+"/higgsCombine.m{}.fit_b.MultiDimFit.mH{}.root".format(mass,mass, mass)
+                else:
+                    workspace = postFitDir+"/higgsCombine.m{}.fit_s.MultiDimFit.mH{}.root".format(mass,mass, mass) 
+                cmd = "cp {} {}".format(workspace,dirThisMass)
+                RunCommand(cmd, "/afs/cern.ch/user/e/eipearso/public/leptoquark_analysis/CMSSW_14_1_0_pre4/src/LQLimitsCMSSW",None,False)
+
+                workspace = workspace.split("/")[-1]
+                cmdData = "combine -M GoodnessOfFit -d {} --algo=saturated -m {} --toysFreq ".format(workspace,mass)
+                if fitType=="bOnly":
+                    cmdData += " -n .data_bOnly --freezeParameters r,signalScaleParam --setParameters r=0,signalScaleParam={} ".format(sigSF)
+                else:
+                    cmdData += " -n .data_sb "
+                    cmdData += " --freezeParameters signalScaleParam --setParameters signalScaleParam={} ".format(sigSF)
+                cmdData += " --snapshotName MultiDimFit"
+                cmdData += " --bypassFrequentistFit"
+                cmdData += " --rMin -1 "
+                RunCommand(cmdData,dirThisMass,None,False)
+
+            #submit to condor
+            print("INFO: Submit fitting toys to condor\n".format(mass))
+            WriteCondorFilesGoF(workspace,mass,dirThisMass,nToys,sigSF,isSB=False)
+            cmd = "condor_submit condor_bOnly.sub"
+            RunCommand(cmd,dirThisMass,None,False)
+
+            WriteCondorFilesGoF(workspace,mass,dirThisMass,nToys,sigSF,isSB=True)
+            cmd = "condor_submit condor_sb.sub"#.format(condorSubFile)
+            RunCommand(cmd,dirThisMass,None,False)
+
+        exit()
+
+    if options.collectGoF:
+        for fitType in ["bOnly", "sb"]:
+            for mass in massList:
+                print("Collect and plot gof for mass {}, {}".format(mass, fitType))
+                dirThisMass = dirName.strip("/")+"/gofTest_snapshot/{}".format(mass)
+                fileData = "higgsCombine.data_{}.GoodnessOfFit.mH{}.root".format(fitType,mass)
+                try:
+                    fileListToys = GetFileList(dirThisMass + "/higgsCombine.toys_{}.GoodnessOfFit.mH{}.*.root".format(fitType,mass))
+                    print("Use toys files {}".format(fileListToys))
+                except Exception as e:
+                    print("WARN: Did not find toys files for mass {}, {} fit. Skipping this one".format(mass, fitType))
+                    continue
+                cmd = "hadd -f higgsCombine.toys_{}.GoodnessOfFit.mH{}.root".format(fitType, mass)
+                for toyFile in fileListToys:
+                    filename = str(toyFile).split("/")[-1]
+                    cmd += " "+filename
+                RunCommand(cmd,dirThisMass,None,False)
+
+                fileToys = "higgsCombine.toys_{}.GoodnessOfFit.mH{}.root".format(fitType,mass)
+                cmd = "combineTool.py -M CollectGoodnessOfFit --input {} {} -m {} -o gof_{}_{}.json".format(fileData, fileToys, mass, mass, fitType)
+                RunCommand(cmd,dirThisMass,None,True)
+
+                cmd = "plotGof.py gof_{}_{}.json --statistic saturated --mass {}.0 -o gofPlot_{}_{} --title-right=\"{} fit, LQ{}\"".format(mass,fitType,mass, mass, fitType, fitType, mass)
+                RunCommand(cmd, dirThisMass,None,True)
+        exit()
+
+    if options.doPrePostFitComparison:
+        print("INFO: Doing pre and post fit yield comparison...", flush=True, end="")
+        InitCardsAndWorkspaces(dirName)
+        datacardDir = dirName.strip("/")+"/datacards"
+        #overwrite the tables file
+        if not os.path.isdir(dirName.strip("/")+"/preAndPostFit_test"):
+            os.mkdir(dirName.strip("/")+"/preAndPostFit_test")
+        if os.path.isfile(dirName.strip("/")+"/preAndPostFit_test/tables.tex"):
+            os.remove(dirName.strip("/")+"/preAndPostFit_test/tables.tex")
+        with open(dirName.strip("/")+"/preAndPostFit_test/tables.tex",'w') as f:
+            f.write("\\documentclass{article}\n")
+            f.write("\\usepackage[a4paper, margin=0.5in]{geometry}\n")
+            f.write("\\usepackage{graphicx}\n")
+            f.write("\\usepackage{caption}\n")
+            f.write("\\begin{document}\n")
+        if os.path.isfile(dirName.strip("/")+"/preAndPostFit_test/ratios.root"):
+            os.remove(dirName.strip("/")+"/preAndPostFit_test/ratios.root")
+        yieldDict = {}
+        sampleList = ["ZJet_amcatnlo_ptBinned_IncStitch", "TTTo2L2Nu", "QCDFakes_DATA", "OTHERBKG_dibosonNLO_singleTop", "total_background", "data"]
+        for mass in massList:
+            sigSF = sigRescaleFactors[str(mass)]['0.5']
+            print("INFO: For mass {} use scale factor {}".format(mass,sigSF))
+            cardWorkspace = FindCardWorkspace(datacardDir + "/*", mass)
+            datacard = str(cardWorkspace).replace(".m{}.root".format(mass),"")
+            PreAndPostFitComparison(datacard, mass, dirName, sigSF, yieldDict,False)
+        with open(dirName.strip("/")+"/preAndPostFit_test/postFitYields.json",'w') as f:
+            json.dump(yieldDict, f, indent=2)
+        with open(dirName.strip("/")+"/preAndPostFit_test/tables.tex", "a") as f:
+            for fitType in ["prefit","fit_b","fit_s"]:
+                f.write("\n \\section*{"+fitType.replace("_","\_")+"}\n")
+                f.write("\\begin{tabular}{|llllllll|}\n")
+                f.write("\\hline\n")
+                f.write("MLQ & signal & DY & TTBar & QCD & other & total bkg & data \\\\ \n")
+                f.write("\\hline\n")
+                for mass in massList:
+                    tableRow = MakeTableRowPDGRules(mass,["LQ_M{}".format(mass)]+sampleList,"bin1",yieldDict, fitType)
+                    print(tableRow)
+                    f.write(tableRow+"\n")
+                f.write("\\hline\n")
+                f.write("\\end{tabular}\n")
+            f.write("\\end{document}")
+
+        exit()
+
     if options.doImpacts:
         print("INFO: Making nuisance parameter impact plots...", flush=True, end="")
         #signalScaleFactorsByMassAndQuantile = InitCardsAndWorkspaces(dirName)
@@ -1924,16 +2611,17 @@ if __name__ == "__main__":
         signalScaleFactor = 1.0
         if not options.readResults:
             separateDatacardsDir = dirName+"/datacards"
-            asimovToysDir = dirName + "/asimovDataWithSignal"
-            if not os.path.isdir(dirName):
-                print("INFO: Making directory",dirName,flush=True)
-                Path(dirName).mkdir(exist_ok=True)
-            if not os.path.isdir(separateDatacardsDir):
-                print("INFO: Making directory",separateDatacardsDir,flush=True)
-                Path(separateDatacardsDir).mkdir(exist_ok=True)
-            if not os.path.isdir(asimovToysDir):
-                print("INFO: Making directory",asimovToysDir,flush=True)
-                Path(asimovToysDir).mkdir(exist_ok=True)
+            if useAsimovData:
+                asimovToysDir = dirName + "/asimovDataWithSignal"
+                if not os.path.isdir(dirName):
+                    print("INFO: Making directory",dirName,flush=True)
+                    Path(dirName).mkdir(exist_ok=True)
+                if not os.path.isdir(separateDatacardsDir):
+                    print("INFO: Making directory",separateDatacardsDir,flush=True)
+                    Path(separateDatacardsDir).mkdir(exist_ok=True)
+                if not os.path.isdir(asimovToysDir):
+                    print("INFO: Making directory",asimovToysDir,flush=True)
+                    Path(asimovToysDir).mkdir(exist_ok=True)
             massListFromCards, cardFilesByMass, _ = SeparateDatacards(combinedDatacard, 0, separateDatacardsDir)
             for mass in massList:
                 cardFile = cardFilesByMass[mass]
@@ -1942,15 +2630,28 @@ if __name__ == "__main__":
                     print("INFO: Using previously-generated card workspace: {}".format(cardWorkspace), flush=True)
                 else:
                     cardWorkspace = ConvertDatacardToWorkspace(cardFile, mass)
-                
-                asimovToyFile = FindAsimovToyData(mass, signalScaleFactor, asimovToysDir)
-                if asimovToyFile is not None:
-                    print("INFO: Using previously-generated Asimov toy file: {}".format(asimovToyFile), flush=True)
+                if useAsimovData:
+                    asimovToyFile = FindAsimovToyData(mass, signalScaleFactor, asimovToysDir)
+                    if asimovToyFile is not None:
+                        print("INFO: Using previously-generated Asimov toy file: {}".format(asimovToyFile), flush=True)
+                    else:
+                        print("INFO: Generating Asimov toy file", flush=True)
+                        asimovToyFile = GenerateAsimovToyData(cardWorkspace, mass, asimovToysDir, dictAsimovToysByScaleFactor, signalScaleFactor, True)
                 else:
-                    print("INFO: Generating Asimov toy file", flush=True)
-                    asimovToyFile = GenerateAsimovToyData(cardWorkspace, mass, asimovToysDir, dictAsimovToysByScaleFactor, signalScaleFactor, True)
+                    asimovToyFile = ""
                 print("Submitting HybridNew jobs to batch for mass {}...".format(mass))
-                SubmitHybridNewBatch((cardWorkspace, mass, dirName, listFailedCommands, 0.5, asimovToyFile, signalScaleFactor)) 
+                SubmitHybridNewBatch((cardWorkspace, mass, dirName, listFailedCommands, -1.0, asimovToyFile, signalScaleFactor)) 
+        else:
+            significances = {}
+            eosDirNoPrefix = eosDir[eosDir.rfind("//")+1:]
+            eosScanDirName = eosDirNoPrefix.rstrip("/") + "/" + dirName  
+            for mass in massList:
+                globString = eosScanDirName+"/hybridNewSignificance.M{}.-1p0.significance/higgsCombineTest.HybridNew.mH{}.root".format(mass, mass)
+                rootFile = FindFile([globString])
+                limits, limitErrs, quantiles, _ = ExtractAsymptoticLimitResultRoot(rootFile)
+                significances[mass] = dict(zip(quantiles, limits))  
+            with open(dirName+"/significance/significances.json",'w') as f:
+                json.dump(significances, f)       
 
     elif options.readResults and options.estimateRValueScanRange:
         if not options.doBetaScan:
@@ -2057,7 +2758,13 @@ if __name__ == "__main__":
                 thXsecToPlot = options.xsecFileForSignalRescaling
             else:
                 thXsecToPlot = xsThFilename
-            BR_Sigma_EE_vsMass(dirName, intLumi, masses, shadeMasses, xsMedExp, xsObs, xsOneSigmaExp, xsTwoSigmaExp, thXsecToPlot)
+            if "BEle" in dirName:
+                bQuarks = True
+                vectorCurves = False
+            else:
+                bQuarks = False
+                vectorCurves = True
+            BR_Sigma_EE_vsMass(dirName, intLumi, masses, shadeMasses, xsMedExp, xsObs, xsOneSigmaExp, xsTwoSigmaExp, thXsecToPlot, bQuarks, vectorCurves)
         else:
             mainDirName = dirName
             betaDirName = dirName #+"/betaScan"

@@ -7,14 +7,15 @@ import os
 import cmsstyle as CMS
 
 
-def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
-    doObserved = True if len(m_observed_lljj) else False
+def ComboPlot(dirName, intLumi, expected_lljj, doObserved=False):
+    #doObserved = True if len(m_observed_lljj) else False
     beta_vals_2sd = set(expected_lljj["0.025"]["betas"])
     beta_vals_1sd = set(expected_lljj["0.16"]["betas"])
     beta_vals_med = set(expected_lljj["0.5"]["betas"])
     beta_vals_1su = set(expected_lljj["0.84"]["betas"])
     beta_vals_2su = set(expected_lljj["0.975"]["betas"])
-    beta_vals = sorted(list(beta_vals_med.intersection(beta_vals_2sd, beta_vals_1sd, beta_vals_1su, beta_vals_2su)))
+    beta_vals_obs = set(expected_lljj["-1"]["betas"])
+    beta_vals = sorted(list(beta_vals_med.intersection(beta_vals_2sd, beta_vals_1sd, beta_vals_1su, beta_vals_2su,beta_vals_obs)))
     print("beta_vals=", beta_vals)
     
     beta_valsdub = list(beta_vals)
@@ -27,12 +28,13 @@ def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
     m_expected_med_lljj = []
     m_expected_1s_lljj = [] 
     m_expected_2s_lljj = []
-
+    m_observed_lljj = []
     for beta in beta_vals:
         m_expected_2s_lljj.append(expected_lljj["0.025"]["massLimits"][expected_lljj["0.025"]["betas"].index(beta)])
         m_expected_1s_lljj.append(expected_lljj["0.16"]["massLimits"][expected_lljj["0.16"]["betas"].index(beta)])
         m_expected_med_lljj.append(expected_lljj["0.5"]["massLimits"][expected_lljj["0.5"]["betas"].index(beta)])
-    print("m_expected_med_lljj=", m_expected_med_lljj)
+        m_observed_lljj.append(expected_lljj["-1"]["massLimits"][expected_lljj["-1"]["betas"].index(beta)])
+    #print("m_expected_med_lljj=", m_expected_med_lljj)
 
     for beta in reversed(beta_vals):
         m_expected_1s_lljj.append(expected_lljj["0.84"]["massLimits"][expected_lljj["0.84"]["betas"].index(beta)])
@@ -72,11 +74,12 @@ def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
     fileNamePng = dirName+"/LQ1BetaScan.png"
     
     # axes labels for the final plot
-    title = ";M_{LQ} [GeV];#beta"
+    title = ";m_{LQ} [GeV];#beta"
     
     # integrated luminosity
+    intLumi = int(intLumi)
     CMS.SetLumi(intLumi)
-    CMS.SetExtraText("Preliminary")
+    CMS.SetExtraText("")
     CMS.ResetAdditionalInfo()
      
     n_exclude = 204
@@ -92,10 +95,10 @@ def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
 
     plotLow = 0
     plotHigh = 1.0
-    c = CMS.cmsCanvas('c', 300, 2000, plotLow, plotHigh, 'M_{LQ} (GeV)', '#beta', False, 0, extraSpace=0.025)
+    c = CMS.cmsCanvas('c', 300, 2050, plotLow, plotHigh, 'm_{LQ} (GeV)', '#beta', False, 0, extraSpace=0.025)
     # c.SetBottomMargin(0.13)
     # c.SetLeftMargin(0.14)
-    c.SetRightMargin(0.06)
+    #c.SetRightMargin(0.06)
     c.SetLogy()
     # c.cd()
     # c.SetGridx()
@@ -103,8 +106,8 @@ def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
     # CMS.cmsStyle.SetPadGridX(True)
     # CMS.cmsStyle.SetPadGridY(True)
     # CMS.UpdatePad()
-    gPad.SetGridx()
-    gPad.SetGridy()
+    #gPad.SetGridx()
+    #gPad.SetGridy()
     gPad.RedrawAxis("g")
 
     CMS.GetcmsCanvasHist(c).SetLabelSize(0.04, "X")
@@ -137,14 +140,15 @@ def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
     beta_vs_m_lljj_expected = TGraph(numbetas, numpy.array(m_expected_med_lljj, dtype="f"), numpy.array(beta_vals, dtype="f"))
     # beta_vs_m_lljj_observed_shade = TPolyLine(numbetas*2, m_2sigma_lljj, beta_valsdub)
     if doObserved:
-        beta_vs_m_lljj_observed = TGraph(massPoints, mData, xsUp_observed)  # FIXME
+        #beta_vs_m_lljj_observed = TGraph(massPoints, mData, xsUp_observed)  # FIXME
+        beta_vs_m_lljj_observed = TGraph(numbetas, numpy.array(m_observed_lljj, dtype="f"), numpy.array(beta_vals, dtype="f"))
         beta_vs_m_lljj_observed.SetMarkerStyle(21)
         beta_vs_m_lljj_observed.SetMarkerColor(kBlack)
         beta_vs_m_lljj_observed.SetLineColor(kBlack)
         beta_vs_m_lljj_observed.SetLineWidth(2)
         beta_vs_m_lljj_observed.SetLineStyle(1)
-        beta_vs_m_lljj_observed.SetMarkerSize(1)
-        beta_vs_m_lljj_observed.SetLineWidth(2)
+        beta_vs_m_lljj_observed.SetMarkerSize(3)
+        beta_vs_m_lljj_observed.SetLineWidth(3)
         beta_vs_m_lljj_observed.SetLineColor(kBlue)
         beta_vs_m_lljj_observed.SetLineStyle(1)
     beta_vs_m_lljj_expected.SetLineWidth(2)
@@ -164,10 +168,10 @@ def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
 
     # beta_vs_m_lljj_expected.Draw("C")
     # CMS.cmsDraw(beta_vs_m_lljj_expected, "C")
-    CMS.cmsDraw(beta_vs_m_lljj_expected, "p", marker=3, mcolor=kBlack, lcolor=kBlack, lwidth=1, lstyle=1, msize=0.001)
+    CMS.cmsDraw(beta_vs_m_lljj_expected, "C", marker=0, mcolor=kBlack, lcolor=kBlack, lwidth=1, lstyle=1, msize=0.001)
     # beta_vs_m_lvjj_expected.Draw("C")
     if doObserved:
-        CMS.cmsDraw(beta_vs_m_lljj_observed, "C")
+        CMS.cmsDraw(beta_vs_m_lljj_observed, "C",marker=0, mcolor=kBlack, lcolor=kBlack, lwidth=3, lstyle=1, msize=0.005)
     # beta_vs_m_lvjj_observed.Draw("C")
     # beta_vs_m_comb_expected.Draw("C")
     # beta_vs_m_comb_observed.Draw("C")
@@ -180,7 +184,7 @@ def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
     legXStart = 0.2
     legYStart = 0.65
     legend = CMS.cmsLeg(legXStart, legYStart, legXStart+legXSize, legYStart+legYSize, textSize=0.036, textFont=42)
-    legend.SetBorderSize(1)
+    legend.SetBorderSize(0)
     legend.SetFillColor(0)
     legend.SetFillStyle(1001)
     legend.SetTextFont(42)
@@ -194,8 +198,10 @@ def ComboPlot(dirName, intLumi, expected_lljj, m_observed_lljj=[]):
     # legend.AddEntry(beta_vs_m_lvjj_expected,"CMS e#nujj (Exp.)","l")
     
     if doObserved:
-        legend.AddEntry(beta_vs_m_lljj_observed,"CMS eejj (Obs.)","l")
-    legend.AddEntry(beta_vs_m_lljj_expected,"CMS eejj (Exp.)","l")
+        legend.AddEntry(beta_vs_m_lljj_observed,"CMS eejj (Observed)","l")
+    legend.AddEntry(beta_vs_m_lljj_expected,"CMS eejj (Expected)","l")
+    legend.AddEntry(exshade1, "68% CL Expected","f")
+    legend.AddEntry(exshade2, "95% CL Expected","f")
     
     # legend.AddEntry(gr_excl_CMSborder,"CMS, 7 TeV, 5.0 fb^{-1}","f")
     

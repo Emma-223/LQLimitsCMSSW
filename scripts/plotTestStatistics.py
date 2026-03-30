@@ -6,8 +6,8 @@ import ROOT
 from ROOT import TFile, TCanvas, RDataFrame, TKey
 
 if __name__ == "__main__":
-    txtFile = "limitDirs_6mar25.txt"
-    limitCalcName = "limits_6mar25"
+    txtFile = "limitDirs_19Dec_LHCMode.txt"
+    limitCalcName = "limits_19Dec_LHCMode"
     with open(txtFile,'r') as f:
         eosDirList = f.readlines()
 
@@ -22,14 +22,19 @@ if __name__ == "__main__":
             continue
         d = d.strip()
         mass = d.split(".")[1].replace("M","")
-        if int(mass) >= 2000: # or int(mass) < 1500:
-            continue
+        #if int(mass) < 2000: # or int(mass) < 1500:
+        #    continue
+        #if not mass == 1000:
+        #    continue
         quantile = d.split(".")[2].replace("p",".")
         #if not "025" in quantile:
          #   continue
         sigSF = d.split("signalScaleFactor")[1]
-        filename = "higgsCombine.signalScaleFactor{}.HybridNew.mH{}.quant{}.gridAll.root".format(sigSF,mass,quantile)
-        filename = "root://eoscms/"+d+"/"+filename
+        if ".-1." in d:
+            filename = "higgsCombine.signalScaleFactor{}.HybridNew.mH{}.gridAll.root".format(sigSF,mass)
+        else:
+            filename = "higgsCombine.signalScaleFactor{}.HybridNew.mH{}.quant{}.gridAll.root".format(sigSF,mass,quantile)
+        filename = "root://eoscms//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso/"+limitCalcName+"/"+d+"/"+filename
 
         if "0.16" in quantile:
             quantLong = quantile.replace("0.16","0.160")
@@ -39,8 +44,13 @@ if __name__ == "__main__":
             quantLong = quantile.replace("0.84","0.840")
         else:
             quantLong = quantile
-        #tfileName = "root://eoscms/"+d+"/"+"higgsCombine.signalScaleFactor{}.HybridNew.mH{}.quant{}.root".format(sigSF,mass,quantLong)
-        tfileName = d+"/"+"higgsCombine.signalScaleFactor{}.HybridNew.mH{}.quant{}.root".format(sigSF,mass,quantLong)
+        print(d)
+        if ".-1." in d:
+            tfileName = "root://eoscms//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso/"+limitCalcName+"/"+d+"/"+"higgsCombine.signalScaleFactor{}.HybridNew.mH{}.root".format(sigSF,mass)
+        else:
+            tfileName = "root://eoscms//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso/"+limitCalcName+"/"+d+"/"+"higgsCombine.signalScaleFactor{}.HybridNew.mH{}.quant{}.root".format(sigSF,mass,quantLong)
+        #tfileName = d+"/"+"higgsCombine.signalScaleFactor{}.HybridNew.mH{}.quant{}.root".format(sigSF,mass,quantLong)
+        print(tfileName)
         tfile = TFile.Open(tfileName)
         limitTree = tfile.Get("limit")
         df = RDataFrame(limitTree)
@@ -51,7 +61,9 @@ if __name__ == "__main__":
             limits[str(mass)][quantile] = round(limit,5)
 
 
-        commandArgs = ["python3","/afs/cern.ch/user/e/eipearso/public/leptoquark_analysis/CMSSW_14_1_0_pre4/src/HiggsAnalysis/CombinedLimit/test/plotTestStatCLs.py","--input",filename,"--poi","r","--val","all","--mass",mass,"--expected","-q",quantile]
+        commandArgs = ["python3","/afs/cern.ch/user/e/eipearso/public/leptoquark_analysis/CMSSW_14_1_0_pre4/src/HiggsAnalysis/CombinedLimit/test/plotTestStatCLs.py","--input",filename,"--poi","r","--val","all","--mass",mass] 
+        if not ".-1." in d:
+            commandArgs += ["--expected","-q",quantile]
         subprocess.run(commandArgs)
 
         canvasesFile = "test_stat_distributions.root"
@@ -70,7 +82,7 @@ if __name__ == "__main__":
         print("limit: {}".format(limit))
         print(cToGet.GetName())
         cToGet.Print("qPlot_{}_{}.pdf".format(mass,quantile))
-        cernboxDir = os.getenv("LQDATAEOS")+"/limits/{}/testStatistics".format(limitCalcName)
+        cernboxDir = os.getenv("LQDATAEOS")+"/limits/{}/testStatPlots".format(limitCalcName)
         if not os.path.isdir(cernboxDir):
             os.mkdir(cernboxDir)
         if not os.path.isdir(cernboxDir+"/"+mass):

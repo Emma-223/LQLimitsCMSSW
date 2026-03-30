@@ -25,8 +25,16 @@ def ReadXSecFile(filename):
                 xs = float(split[1])
                 xsTh.append(xs)
                 if "scalar" in filename:
-                    yPDF_up.append(xs*(1+float(split[5])/100.))
-                    yPDF_down.append(xs*(1-float(split[6])/100.))
+                    pdfUp = xs*(float(split[5])/100.)
+                    scaleUp = xs*(float(split[3])/100.)
+                    totUp = math.sqrt(pdfUp**2 + scaleUp**2)
+
+                    pdfDown = xs*(float(split[6])/100.)
+                    scaleDown = xs*(float(split[4])/100.)
+                    totDown = math.sqrt(pdfDown**2 + scaleDown**2)
+
+                    yPDF_up.append(xs+totUp)
+                    yPDF_down.append(xs-totDown)
                 elif "vector" in filename:
                     yPDF_up.append(float(split[6]))
                     yPDF_down.append(float(split[5]))
@@ -53,28 +61,48 @@ def ReadXSecFile(filename):
     return masses, xsTh, yPDF_up, yPDF_down
 
 
-def BR_Sigma_EE_vsMass(dirName=".", intLumi="35.9", mData = [], x_shademasses = [], xsUp_expected = [], xsUp_observed = [], y_1sigma = [], y_2sigma = [], xsThFilename="xsection_theory_13TeV_scalarPairLQ.txt"):
+def BR_Sigma_EE_vsMass(dirName=".", intLumi="35.9", mData = [], x_shademasses = [], xsUp_expected = [], xsUp_observed = [], y_1sigma = [], y_2sigma = [], xsThFilename="xsection_theory_13TeV_scalarPairLQ.txt", do_b_quarks=False, addVectorXsec=True):
     #xsThFilename = "$LQANA/config/xsection_theory_13TeV_scalarPairLQ.txt"
     #xsThFilename = "$LQANA/config/xsection_theory_13TeV_stopPair.txt"
     #xsThFilename = "xsection_theory_13TeV_vectorSingletU1_YM.txt"
     #xsThFilename = "xsection_theory_13TeV_atlas.txt"
     mTh, xsTh, y_pdf, yPDFDown = ReadXSecFile(xsThFilename)
-    print(xsTh)
+    #print(xsTh)
     nTH = len(mTh)
     massPoints = len(mData)
     x_pdf = mTh
     x_pdf.extend(list(reversed(mTh)))
     y_pdf.extend(list(reversed(yPDFDown)))
 
+
+    if addVectorXsec:
+        mTh_YM, xsTh_YM, y_pdf_YM, yPDFDown_YM = ReadXSecFile("xsection_theory_13TeV_vectorSingletU1_YM.txt")
+        nTH_YM = len(mTh_YM)
+        #massPoints_YM = len(mData_YM)
+        x_pdf_YM = mTh_YM
+        x_pdf_YM.extend(list(reversed(mTh_YM)))
+        y_pdf_YM.extend(list(reversed(yPDFDown_YM)))
+
+        mTh_min, xsTh_min, y_pdf_min, yPDFDown_min = ReadXSecFile("xsection_theory_13TeV_vectorSingletU1_minimal.txt")
+        nTH_min = len(mTh_min)
+        #massPoints_min = len(mData_min)
+        x_pdf_min = mTh_min
+        x_pdf_min.extend(list(reversed(mTh_min)))
+        y_pdf_min.extend(list(reversed(yPDFDown_min)))
+
     # filename for the final plot (NB: changing the name extension changes the file format)
-    fileName2 = dirName+"/BR_Sigma_EE.pdf"
-    fileName3 = dirName+"/BR_Sigma_EE.png"
+    fileName2 = dirName+"/BR_Sigma_EE_preliminary.pdf"
+    fileName3 = dirName+"/BR_Sigma_EE_preliminary.png"
     fileName1 = dirName+"/BR_Sigma_EE.eps"
 
+    #gStyle.SetImageScaling(0.1)
+
+    intLumi = int(intLumi)
     # integrated luminosity
-    CMS.SetLumi(intLumi)
-    CMS.SetExtraText("Preliminary")
     CMS.ResetAdditionalInfo()
+    CMS.SetLumi(intLumi)
+    #CMS.SetExtraText("")
+    CMS.SetExtraText("Private Work")
     # CMS.cmsGrid(True)
 
     #mData = [1400.0 , 1500.0 , 1600.0 , 1700.0 , ]
@@ -93,10 +121,11 @@ def BR_Sigma_EE_vsMass(dirName=".", intLumi="35.9", mData = [], x_shademasses = 
     plotLow = 0.00001
     plotHigh = 30.
 
-    c = CMS.cmsCanvas('c', 300, 3000, plotLow, plotHigh, 'M_{LQ} (GeV)', '#sigma #times #beta^{2} (pb)', True, 0, extraSpace=0.025)
+    c = CMS.cmsCanvas('c', 300, 3000, plotLow, plotHigh, 'm_{LQ} (GeV)', '#sigma #times #beta^{2} (pb)', True, 0, extraSpace=0.025)
+    c.SetCanvasSize(800,800)
     # c.SetBottomMargin(0.13)
     # c.SetLeftMargin(0.14)
-    c.SetRightMargin(0.06)
+    #c.SetRightMargin(0.06)
     c.SetLogy()
     # c.cd()
     # c.SetGridx()
@@ -104,8 +133,8 @@ def BR_Sigma_EE_vsMass(dirName=".", intLumi="35.9", mData = [], x_shademasses = 
     # CMS.cmsStyle.SetPadGridX(True)
     # CMS.cmsStyle.SetPadGridY(True)
     # CMS.UpdatePad()
-    gPad.SetGridx()
-    gPad.SetGridy()
+    #gPad.SetGridx()
+    #gPad.SetGridy()
     gPad.RedrawAxis("g")
 
     CMS.GetcmsCanvasHist(c).SetLabelSize(0.04, "X")
@@ -127,6 +156,10 @@ def BR_Sigma_EE_vsMass(dirName=".", intLumi="35.9", mData = [], x_shademasses = 
     # bg.Draw()
 
     xsTh_vs_m = TGraph(nTH, numpy.array(mTh, dtype="f"), numpy.array(xsTh, dtype="f"))
+
+    if addVectorXsec:
+        xsTh_vs_m_YM = TGraph(nTH_YM, numpy.array(mTh_YM, dtype="f"), numpy.array(xsTh_YM, dtype="f"))
+        xsTh_vs_m_min = TGraph(nTH_min, numpy.array(mTh_min, dtype="f"), numpy.array(xsTh_min, dtype="f"))
     # xsTh_vs_m.SetLineWidth(2)
     # xsTh_vs_m.SetLineColor(kBlue)
     # xsTh_vs_m.SetFillColor(kCyan-6)
@@ -155,30 +188,63 @@ def BR_Sigma_EE_vsMass(dirName=".", intLumi="35.9", mData = [], x_shademasses = 
     xsUp_observed_logY = []
     xsUp_expected_logY = []
     xsTh_logY = []
+    xsTh_logY_YM = []
+    xsTh_logY_min = []
     if doObserved:
         for ii in range(0, massPoints):
-            xsUp_observed_logY.append(math.log(xsUp_observed[ii]))
+            if xsUp_observed[ii] > 0:
+                xsUp_observed_logY.append(math.log(xsUp_observed[ii]))
+            else:
+                xsUp_observed_logY.append(math.log(1e-10))
         xsData_vs_m_observed_log = TGraph(massPoints, numpy.array(mData, dtype="f"), numpy.array(xsUp_observed_logY, dtype="f"))
     for ii in range(0, massPoints):
         xsUp_expected_logY.append(math.log(xsUp_expected[ii]))
     for ii in range(0, nTH):
         xsTh_logY.append(math.log(xsTh[ii]))
+    if addVectorXsec:
+        for ii in range(0,nTH_YM):
+            xsTh_logY_YM.append(math.log(xsTh_YM[ii]))
+        for ii in range(0,nTH_min):
+            xsTh_logY_min.append(math.log(xsTh_min[ii]))
     xsTh_vs_m_log = TGraph(nTH, numpy.array(mTh, dtype="f"), numpy.array(xsTh_logY, dtype="f"))
+    if addVectorXsec:
+        xsTh_YM_vs_m_log = TGraph(nTH_YM, numpy.array(mTh_YM, dtype="f"), numpy.array(xsTh_logY_YM, dtype="f"))
+        xsTh_min_vs_m_log = TGraph(nTH_min, numpy.array(mTh_min, dtype="f"), numpy.array(xsTh_logY_min, dtype="f"))
     xsData_vs_m_expected_log = TGraph(massPoints, numpy.array(mData, dtype="f"), numpy.array(xsUp_expected_logY, dtype="f"))
 
     # xsTh_vs_m_tgraph = TGraph(221, numpy.array(mTh, dtype="f"), numpy.array(xsTh, dtype="f"))
 
     obslim = 0.0
     exlim = 0.0
+    obslim_YM = 0.0
+    exlim_YM = 0.0
+    obslim_min = 0.0
+    exlim_min = 0.0
     for mtest in numpy.linspace(1300.0, 3000.0, 17000, endpoint=False):
         if pow(10.0, xsData_vs_m_expected_log.Eval(mtest))/pow(10.0, xsTh_vs_m_log.Eval(mtest)) < 1.0 and pow(10.0, xsData_vs_m_expected_log.Eval(mtest+0.1))/pow(10.0, xsTh_vs_m_log.Eval(mtest+0.10)) > 1.0:
             exlim = mtest
+        if addVectorXsec:
+            if pow(10.0, xsData_vs_m_expected_log.Eval(mtest))/pow(10.0, xsTh_YM_vs_m_log.Eval(mtest)) < 1.0 and pow(10.0, xsData_vs_m_expected_log.Eval(mtest+0.1))/pow(10.0, xsTh_YM_vs_m_log.Eval(mtest+0.10)) > 1.0:
+                exlim_YM = mtest
+            if pow(10.0, xsData_vs_m_expected_log.Eval(mtest))/pow(10.0, xsTh_min_vs_m_log.Eval(mtest)) < 1.0 and pow(10.0, xsData_vs_m_expected_log.Eval(mtest+0.1))/pow(10.0, xsTh_min_vs_m_log.Eval(mtest+0.10)) > 1.0:
+                exlim_min = mtest
         if doObserved:
             if pow(10.0, xsData_vs_m_observed_log.Eval(mtest))/pow(10.0, xsTh_vs_m_log.Eval(mtest)) < 1.0 and pow(10.0, xsData_vs_m_observed_log.Eval(mtest+0.1))/pow(10.0, xsTh_vs_m_log.Eval(mtest+0.10)) > 1.0:
                 obslim = mtest
+            if addVectorXsec:
+                if pow(10.0, xsData_vs_m_observed_log.Eval(mtest))/pow(10.0, xsTh_min_vs_m_log.Eval(mtest)) < 1.0 and pow(10.0, xsData_vs_m_observed_log.Eval(mtest+0.1))/pow(10.0, xsTh_min_vs_m_log.Eval(mtest+0.10)) > 1.0:
+                    obslim_min = mtest
+                if pow(10.0, xsData_vs_m_observed_log.Eval(mtest))/pow(10.0, xsTh_YM_vs_m_log.Eval(mtest)) < 1.0 and pow(10.0, xsData_vs_m_observed_log.Eval(mtest+0.1))/pow(10.0, xsTh_YM_vs_m_log.Eval(mtest+0.10)) > 1.0:
+                    obslim_YM = mtest
     print("## LLJJ expected limit:", exlim, "GeV")
+    if addVectorXsec:
+        print("## LLJJ expected limit, vector minimal:", exlim_min, "GeV")
+        print("## LLJJ expected limit, vector YM:", exlim_YM, "GeV")
     if doObserved:
         print("## LLJJ observed limit:", obslim, "GeV")
+        if addVectorXsec:
+            print("## LLJJ observed limit, vector minimal:", obslim_min, "GeV")
+            print("## LLJJ observed limit, vector YM:", obslim_YM, "GeV")
 
 
    #  for 1-sigma and 2-sigma expected for long-lived 2D
@@ -265,7 +331,17 @@ def BR_Sigma_EE_vsMass(dirName=".", intLumi="35.9", mData = [], x_shademasses = 
     CMS.cmsDraw(grshade, "f", fcolor=kCyan-6, fstyle=3001)
 
     # xsTh_vs_m.Draw("L")
-    CMS.cmsDraw(xsTh_vs_m, "l", fcolor=kCyan-6, lwidth=2, lcolor=kBlue, msize=0.00001, marker=22, mcolor=kBlue)
+    CMS.cmsDraw(xsTh_vs_m, "l", fcolor=kCyan-6, lwidth=2, lcolor=kBlue, msize=0.00001, marker=22, mcolor=kBlue, fstyle=3001)
+
+    if addVectorXsec:
+        grshade_YM = TGraph(2*nTH_YM, numpy.array(x_pdf_YM, dtype="f"), numpy.array(y_pdf_YM, dtype="f"))
+        CMS.cmsDraw(grshade_YM, "f", fcolor=TColor.GetColor("#7a21dd"), alpha=0.2)
+        CMS.cmsDraw(xsTh_vs_m_YM, "Cl", fcolor=TColor.GetColor("#7a21dd"), lwidth=2, lcolor=TColor.GetColor("#7a21dd"), lstyle=5, msize=1, marker=22, mcolor=TColor.GetColor("#7a21dd"),alpha=0.2)
+
+        grshade_min = TGraph(2*nTH_min, numpy.array(x_pdf_min, dtype="f"), numpy.array(y_pdf_min, dtype="f"))
+        CMS.cmsDraw(grshade_min, "f", fcolor=TColor.GetColor("#e42536"),alpha=0.2)
+        CMS.cmsDraw(xsTh_vs_m_min, "C", fcolor=TColor.GetColor("#e42536"), lwidth=2, lcolor=TColor.GetColor("#e42536"), lstyle=7, msize=0.00001, marker=22, mcolor=TColor.GetColor("#e42536"),alpha=0.2)
+
     # xsData_vs_m_expected.Draw("LP")
     CMS.cmsDraw(xsData_vs_m_expected, "lp", marker=0, mcolor=kBlack, lcolor=kBlack, lwidth=2, lstyle=7, msize=0.001)
     if doObserved:
@@ -273,32 +349,44 @@ def BR_Sigma_EE_vsMass(dirName=".", intLumi="35.9", mData = [], x_shademasses = 
 
     # grshade.SetFillStyle(1001)
 
-    legXSize = 0.5
+    legXSize = 0.45
     legYSize = 0.27
-    legXStart = 0.4
+    legXStart = 0.45
     legYStart = 0.62
     # legend = TLegend(legXStart, legYStart, legXStart+legXSize, legYStart+legYSize)
-    legend = CMS.cmsLeg(legXStart, legYStart, legXStart+legXSize, legYStart+legYSize, textSize=0.036, textFont=42)
-    legend.SetBorderSize(1)
+    legend = CMS.cmsLeg(legXStart, legYStart, legXStart+legXSize, legYStart+legYSize, textSize=0.025, textFont=42)
+    legend.SetBorderSize(0)
     legend.SetFillColor(0)
     legend.SetFillStyle(1001)
     # legend.SetTextSize(.036)
     # legend.SetTextFont(42)
     legend.SetMargin(0.15)
+
+    '''
     if "vector" in xsThFilename:
         legend.SetHeader("Vector LQ #bar{LQ} #rightarrow eejj")
     else:
-        legend.SetHeader("Scalar LQ #bar{LQ} #rightarrow eejj")
+        if do_b_quarks:
+            legend.SetHeader("Scalar LQ #bar{LQ} #rightarrow eej_{b}j_{b}")
+        else:
+            legend.SetHeader("Scalar LQ #bar{LQ} #rightarrow eejj")
+    '''
+
     # legend.AddEntry(p2,"ATLAS exclusion (20 fb^{-1}, 8TeV)","f")
     # legend.AddEntry(pl,"CMS exclusion (19.7 fb^{-1}, 8 TeV)","f")
     # legend.AddEntry(p3,"CMS exclusion (2.7 fb^{-1}, 13 TeV)","f")
-
-    legend.AddEntry(xsTh_vs_m, "#sigma_{theory}#times #beta^{2}  with unc. ( #beta=1)", "lf")
+    legend.SetHeader("LQ #bar{LQ} #rightarrow eejj")
     # legend.AddEntry(xsTh_vs_m,"#sigma_{theory}#times#beta^{2}  with unc. (#beta=0.5)","lf")
     # legend.AddEntry(xsTh_vs_m,"#sigma_{theory}#times2#beta(1-#beta)  with unc. (#beta=0.5)","lf")
-    legend.AddEntry(xsData_vs_m_expected,  "Expected 95% CL upper limit", "lp")
     if doObserved:
         legend.AddEntry(xsData_vs_m_observed,  "Observed 95% CL upper limit", "lp")
+    legend.AddEntry(xsData_vs_m_expected,  "Median Expected 95% CL upper limit", "lp")
+    legend.AddEntry(exshade1, "68% CL Expected","f")
+    legend.AddEntry(exshade2, "95% CL Expected","f")
+    legend.AddEntry(xsTh_vs_m, "Scalar #sigma_{theory}#times #beta^{2}  with unc. ( #beta=1)", "lf")
+    if addVectorXsec:
+        legend.AddEntry(xsTh_vs_m_min, "Vector #sigma_{theory}#times #beta^{2}  with unc. ( #beta=1, #kappa=0)", "lf")
+        legend.AddEntry(xsTh_vs_m_YM, "Vector #sigma_{theory}#times #beta^{2}  with unc. ( #beta=1, #kappa=1)", "lf")
     # legend.Draw()
 
     # c.Modified()
