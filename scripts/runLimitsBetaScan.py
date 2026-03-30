@@ -59,10 +59,6 @@ if not 'CMSSW_VERSION' in os.environ:
 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
 #NOTE: script was designed to work from CMS connect. Running on lxplus will likely not work without further development.
-#On CMS connect, to use CMSSW you need to run in a container by running the command: cmssw-el9
-#however, you can't submit to condor from within the container, so submitting the limit jobs runs in two steps.
-#(1) write the condor.sh and condor.sub files (from inside the container)
-#(2) loop over all directories and submit the jobs (from outside the container)
 
 def GenerateAsimovToyDataBetaId(workspace,mass,toysDir,dictAsimovToysByBetaId, betaId, scaleFactor=1.0):
     cmd = 'combine -M GenerateOnly {} -t -1 --seed -1 --saveToys -n .asimov.betaId{} -m {} {}'.format(workspace, betaId, mass, commonCombineArgs.format(scaleFactor))
@@ -118,7 +114,6 @@ def WriteCondorSubFile(condorDir,inputFiles,nJobs):
     with open(filename,'w') as f:
         f.write("Universe = vanilla\n")
         f.write("executable = "+filename.replace(".sub",".sh")+"\n")
-        eosPath = "root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso"
         f.write("arguments = $(procId)\n")
         f.write("output                = "+filename.replace(".sub",".$(ClusterId).$(ProcId).out")+"\n")
         f.write("error                 = "+filename.replace(".sub",".$(ClusterId).$(ProcId).err")+"\n")
@@ -129,8 +124,8 @@ def WriteCondorSubFile(condorDir,inputFiles,nJobs):
         combineBin = shutil.which("combine")
         if combineBin is None:
             raise RuntimeError("No combine binary found in $PATH")
-        cmssw_setup_script = "/home/emma-pearson/cmssw_setup_copyForDebug.sh" #Come up with a better way of doing this than hardcoding it
-        inputFiles += [combineBin, sandbox, cmssw_setup_script]
+        #cmssw_setup_script = "/home/emma-pearson/cmssw_setup_copyForDebug.sh" #Come up with a better way of doing this than hardcoding it
+        #inputFiles += [combineBin, sandbox, cmssw_setup_script]
         #f.write("transfer_input_files = {}\n".format(",".join(inputFiles)))
         f.write("should_transfer_files = YES\n\n")
         f.write("transfer_output_files = \"\"\n")
@@ -138,31 +133,32 @@ def WriteCondorSubFile(condorDir,inputFiles,nJobs):
         f.write("max_materialize = 50\n")
         f.write("max_retries = 3\n")
         f.write("on_exit_hold = (ExitBySignal == True) || (ExitCode != 0)\n")
-        f.write("periodic_hold = (JobStatus == 2) && ((CurrentTime - EnteredCurrentStatus) > 8 * 60 * 60)\n")#runs for > 5hrs
+        f.write("periodic_hold = (JobStatus == 2) && ((CurrentTime - EnteredCurrentStatus) > 8 * 60 * 60)\n")#runs for > 8hrs
         f.write("periodic_hold_reason = \"ran for more than 8 hrs\"\n")
         f.write("periodic_release =  (NumJobStarts < 3) && ((CurrentTime - EnteredCurrentStatus) > 300)\n\n")
         f.write("queue {}\n".format(nJobs))
 
-def GetCommonCondorShFileLines(filesToMove,mass):
+def GetCommonCondorShFileLines(otherFilesToMove,mass,eosPath):
     lines = []
     lines.append("#!/bin/sh\n")
     lines.append("unlimit -s unlimited\n")
     lines.append("set -e\n")
     lines.append("condorNodeBaseDir=$PWD\n\n")
-    lines.append("xrdcp root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso/cmssw_setup_copyForDebug.sh .\n")
-    lines.append("xrdcp root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso/sandbox-CMSSW_14_1_0_pre4-8e58ceb.tar.bz2 .\n")
-    lines.append("xrdcp root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso/combine .\n\n")
+    lines.append("xrdcp {}/cmssw_setup_copyForDebug.sh .\n".format(eosPath))
+    lines.append("xrdcp {}/{} .\n".format(eosPath, sandboxName))
+    lines.append("xrdcp {}/combine .\n\n".format(eosPath))
     lines.append("source ./cmssw_setup_copyForDebug.sh\n")
     lines.append("export VO_CMS_SW_DIR=/cvmfs/cms.cern.ch\n")
     lines.append("source $VO_CMS_SW_DIR/cmsset_default.sh\n")
     sandboxName = sandbox.split("/")[-1]
     lines.append("cmssw_setup {}\n".format(sandboxName))
     lines.append("cd $CMSSW_BASE\n")
-    lines.append("xrdcp root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso/datacards/datacards/tmpDatacard_m{}_card0_combCardFile.txt.m{}.root .\n\n".format(mass,mass))
-    copyCmd = "cp"
-    for f in filesToMove:
-        copyCmd += " $condorNodeBaseDir/"+f
-    copyCmd += " ."
+    lines.append("xrdcp {}/tmpDatacard_m{}_card0_combCardFile.txt.m{}.root .\n\n".format(mass,mass,eosDatacardDir))
+    #copyCmd = "cp"
+    for f in otherFilesToMove:
+        #copyCmd += " $condorNodeBaseDir/"+f
+        lines.append("xrdcp {} .\n".format(f))
+    #copyCmd += " ."
     #lines.append(copyCmd+"\n")
     return lines
 
@@ -177,7 +173,7 @@ def WriteCondorFilesLimits(cardWorkspace,mass,quant,betaList,condorDir,asimovToy
     filesToMove = []
     for f in [cardWorkspace]+asimovToys:
         filesToMove.append(f.split("/")[-1])
-    shFileCommonLines = GetCommonCondorShFileLines(filesToMove,mass)
+    shFileCommonLines = GetCommonCondorShFileLines(filesToMove,mass,eosDir)
     shFileName = condorDir+"/condor.sh"
     with open(shFileName, 'w') as f:
         f.writelines(shFileCommonLines)
@@ -238,7 +234,7 @@ def WriteCondorFilesGridGen(cardWorkspace,mass,quant,betaList,condorDir,asimovTo
     filesToMove = []
     #for f in [cardWorkspace]+asimovToys:
     #    filesToMove.append(f.split("/")[-1])
-    shFileCommonLines = GetCommonCondorShFileLines(filesToMove,mass)
+    shFileCommonLines = GetCommonCondorShFileLines(filesToMove,mass,eosDir)
     shFileName = condorDir+"/condor.sh"
     if quant == 0.025:
         nToys = 40000
@@ -473,8 +469,8 @@ def CreateComboArrays(xsecLimitsByMassAndQuantile):
 # Run
 #################################################################################
 if __name__ == "__main__":
-    massList = list(range(300,2100,100))
-    #massList = [800]
+    #massList = list(range(300,2100,100))
+    massList = [300]
     betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
     nBetasPerCondorSub = 10
     nGridPoints = 50
@@ -493,7 +489,9 @@ if __name__ == "__main__":
         quantilesExpected.append(-1)
     useAsimovData = False
 
-    sandbox = os.getenv("HOME")+"/sandbox-CMSSW_14_1_0_pre4-8e58ceb.tar.bz2"
+    sandboxName = "sandbox-CMSSW_14_1_0_pre4-8e58ceb.tar.bz2"
+    eosDatacardDir = "root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso/datacards/datacards"
+
     ncores = 6
     parser = OptionParser(
         usage="%prog -d datacard -n name [options]"
