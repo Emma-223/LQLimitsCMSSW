@@ -150,10 +150,10 @@ def GetCommonCondorShFileLines(otherFilesToMove,mass,eosPath):
     lines.append("source ./cmssw_setup_copyForDebug.sh\n")
     lines.append("export VO_CMS_SW_DIR=/cvmfs/cms.cern.ch\n")
     lines.append("source $VO_CMS_SW_DIR/cmsset_default.sh\n")
-    sandboxName = sandbox.split("/")[-1]
+    #sandboxName = sandbox.split("/")[-1]
     lines.append("cmssw_setup {}\n".format(sandboxName))
     lines.append("cd $CMSSW_BASE\n")
-    lines.append("xrdcp {}/tmpDatacard_m{}_card0_combCardFile.txt.m{}.root .\n\n".format(mass,mass,eosDatacardDir))
+    lines.append("xrdcp {}/tmpDatacard_m{}_card0_combCardFile.txt.m{}.root .\n\n".format(eosDatacardDir, mass,mass))
     #copyCmd = "cp"
     for f in otherFilesToMove:
         #copyCmd += " $condorNodeBaseDir/"+f
