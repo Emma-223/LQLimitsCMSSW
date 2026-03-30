@@ -13,13 +13,13 @@ def GetOkCondorSites():
         for line in siteConfFile:
             if "DefaultSites" in line:
                 siteList = line.split("=")[-1].strip().split(",")
-    sitesToExclude = ["T2_TR_METU", "T2_UA_KIPT", "T1_ES_PIC", "T2_TW_NCHC", "T2_US_MIT", "T2_UA_KIPT", "T2_ES_IFCA", "T2_EE_Estonia", "T2_ES_CIEMAT", "T3_US_UMiss"]
+    sitesToExclude = ["T2_TR_METU", "T2_UA_KIPT", "T1_ES_PIC", "T2_TW_NCHC", "T2_US_MIT", "T2_UA_KIPT", "T2_ES_IFCA", "T2_EE_Estonia", "T2_ES_CIEMAT", "T3_US_UMiss","T1_DE_KIT"]
     for s in sitesToExclude:
         if s in siteList:
             siteList.remove(s)
-    okSitesCmd = "CONDOR_DEFAULT_DESIRED_SITES=\""+",".join(siteList)
+    okSitesCmd = "+DESIRED_Sites=\""+",".join(siteList)
     okSitesCmd = okSitesCmd.strip(",")+"\""
-    print(okSitesCmd)
+    #print(okSitesCmd)
     return okSitesCmd
 
 def progress_bar(i, tot, prefix='', suffix = '', length = 50, fill = '*'):
@@ -34,7 +34,7 @@ def SubmitJob(f,dirname):
     filename = parentDir+"/"+dirname+"/"+f+"/condor.sub"
     #time.sleep(randint(2,5)) # for troubleshooting the progress bar
     #subprocess.check_output([okSitesCmd,"condor_submit",filename])
-    exitCode = os.WEXITSTATUS(os.system(okSitesCmd+" condor_submit "+filename+" > {}/{}/{}/condor_submit_log.txt".format(parentDir,dirname,f)))
+    exitCode = os.WEXITSTATUS(os.system("condor_submit "+filename+" > {}/{}/{}/condor_submit_log.txt".format(parentDir,dirname,f)))
 #    with open("{}/{}/{}/condor_submit_log.txt".format(parentDir,dirname,f)) as f:
 #        lines = f.readlines()
 #    outTxt = " ".join(lines)
@@ -52,10 +52,20 @@ if __name__ == "__main__":
 
     dirList = os.listdir(parentDir)
     totalFiles = 0
+    print(dirList)
     for d in dirList:
         if not os.path.isdir(parentDir+"/"+d):
             continue
-            #pool.apply_async(SubmitJobsInDir,[d])
+        mass = d.split(".")[1].replace("M","")
+        mass = int(mass)
+        #if not mass in [1300,1400,1500,1600]:
+        #    continue
+        #if not "-1" in d:
+        #    continue
+        #if mass < 600:
+        #    continue
+        #if mass == 300 and "-1" in d and "betaVals1To10" in d:
+        #    continue
         filesToSubmit = os.listdir(parentDir+"/"+d)
         filesToSubmit.sort()
         nFiles = len(filesToSubmit)

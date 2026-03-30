@@ -24,7 +24,7 @@ from ROOT import TFile, TGraph, TSpline3
 
 from BR_Sigma_EE_vsMass import BR_Sigma_EE_vsMass
 from ComboPlotLQ1 import ComboPlot
-
+from submitJobs import GetOkCondorSites
 from runLimits import (
     ErrorCallback,
     GetExecTimeStr,
@@ -46,7 +46,7 @@ from runLimits import (
     CheckErrorFile,
     CheckForErrorAndResultFiles,
     ComputeBetaLimits,
-    CreateComboArrays,
+#    CreateComboArrays,
     get_value,
 )
 
@@ -77,14 +77,29 @@ def FindAsimovToyDataBetaId(mass, betaId, toysDir):
         return Path(listOfToyFiles[-1]).resolve()
 
 def GetRMinAndRMax(mass, quant, betaId):
-    rMed = rValuesByMassBetaAndQuantile[str(mass)][str(betaId)][str(quant)]
+    #if quant > 0:
+    #    rMed = rValuesByMassBetaAndQuantile[str(mass)][str(betaId)][str(quant)]
+    #else:
+    #    rMed = rValuesByMassBetaAndQuantile[str(mass)][str(betaId)]['0.5']
+    if quant < 0 and mass in [1300,1400,1500,1600]:
+        rMed = rValuesByMassBetaAndQuantile[str(mass)][str(betaId)]['0.5']
+    else:
+        rMed = rValuesByMassBetaAndQuantile[str(mass)][str(betaId)][str(quant)]
+        if quant < 0 and rMed < 0.5:
+            rMed = rValuesByMassBetaAndQuantile[str(mass)][str(betaId)]['0.5']
     if quant == 0.025 and mass > 800:
         if mass < 1200:
             rMax = 1.8
             rMin = 0.85
-        else:
+        elif mass >= 1200 and mass < 1400:
             rMax = 2.5
             rMin = 1.25
+        elif mass >= 1400 and mass < 1700:
+            rMax = 2.75
+            rMin = 1.5
+        else: #mass >= 1700
+            rMax = 3.0
+            rMin = 1.75
     elif quant == 0.16 and mass > 1000:
         rMax = 2.0
         rMin = 1.0
@@ -103,43 +118,52 @@ def WriteCondorSubFile(condorDir,inputFiles,nJobs):
     with open(filename,'w') as f:
         f.write("Universe = vanilla\n")
         f.write("executable = "+filename.replace(".sub",".sh")+"\n")
+        eosPath = "root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso"
         f.write("arguments = $(procId)\n")
         f.write("output                = "+filename.replace(".sub",".$(ClusterId).$(ProcId).out")+"\n")
         f.write("error                 = "+filename.replace(".sub",".$(ClusterId).$(ProcId).err")+"\n")
         f.write("log                   = "+filename.replace(".sub",".$(ClusterId).$(ProcId).log")+"\n")
         f.write("+REQUIRED_OS = \"rhel9\"\n\n")
+        desiredSites = GetOkCondorSites()
+        f.write(desiredSites+"\n\n")
         combineBin = shutil.which("combine")
         if combineBin is None:
             raise RuntimeError("No combine binary found in $PATH")
         cmssw_setup_script = "/home/emma-pearson/cmssw_setup_copyForDebug.sh" #Come up with a better way of doing this than hardcoding it
         inputFiles += [combineBin, sandbox, cmssw_setup_script]
-        f.write("transfer_input_files = {}\n".format(",".join(inputFiles)))
+        #f.write("transfer_input_files = {}\n".format(",".join(inputFiles)))
         f.write("should_transfer_files = YES\n\n")
+        f.write("transfer_output_files = \"\"\n")
+        #f.write("should_transfer_files = NO\n\n")
         f.write("max_materialize = 50\n")
-        f.write("max_retries = 10\n")
+        f.write("max_retries = 3\n")
         f.write("on_exit_hold = (ExitBySignal == True) || (ExitCode != 0)\n")
-        f.write("periodic_hold = (JobStatus == 2) && ((CurrentTime - EnteredCurrentStatus) > 24 * 60 * 60)\n")#runs for > 24hrs
-        f.write("periodic_hold_reason = \"ran for more than 24 hrs\"\n")
-        f.write("periodic_release =  (NumJobStarts < 10) && ((CurrentTime - EnteredCurrentStatus) > 300)\n\n")
+        f.write("periodic_hold = (JobStatus == 2) && ((CurrentTime - EnteredCurrentStatus) > 8 * 60 * 60)\n")#runs for > 5hrs
+        f.write("periodic_hold_reason = \"ran for more than 8 hrs\"\n")
+        f.write("periodic_release =  (NumJobStarts < 3) && ((CurrentTime - EnteredCurrentStatus) > 300)\n\n")
         f.write("queue {}\n".format(nJobs))
 
-def GetCommonCondorShFileLines(filesToMove):
+def GetCommonCondorShFileLines(filesToMove,mass):
     lines = []
     lines.append("#!/bin/sh\n")
     lines.append("unlimit -s unlimited\n")
     lines.append("set -e\n")
-    lines.append("condorNodeBaseDir=$PWD\n")
+    lines.append("condorNodeBaseDir=$PWD\n\n")
+    lines.append("xrdcp root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso/cmssw_setup_copyForDebug.sh .\n")
+    lines.append("xrdcp root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso/sandbox-CMSSW_14_1_0_pre4-8e58ceb.tar.bz2 .\n")
+    lines.append("xrdcp root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso/combine .\n\n")
     lines.append("source ./cmssw_setup_copyForDebug.sh\n")
     lines.append("export VO_CMS_SW_DIR=/cvmfs/cms.cern.ch\n")
     lines.append("source $VO_CMS_SW_DIR/cmsset_default.sh\n")
     sandboxName = sandbox.split("/")[-1]
     lines.append("cmssw_setup {}\n".format(sandboxName))
     lines.append("cd $CMSSW_BASE\n")
+    lines.append("xrdcp root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso/datacards/datacards/tmpDatacard_m{}_card0_combCardFile.txt.m{}.root .\n\n".format(mass,mass))
     copyCmd = "cp"
     for f in filesToMove:
         copyCmd += " $condorNodeBaseDir/"+f
     copyCmd += " ."
-    lines.append(copyCmd+"\n")
+    #lines.append(copyCmd+"\n")
     return lines
 
 def WriteCondorFilesLimits(cardWorkspace,mass,quant,betaList,condorDir,asimovToys,gridFiles):
@@ -153,7 +177,7 @@ def WriteCondorFilesLimits(cardWorkspace,mass,quant,betaList,condorDir,asimovToy
     filesToMove = []
     for f in [cardWorkspace]+asimovToys:
         filesToMove.append(f.split("/")[-1])
-    shFileCommonLines = GetCommonCondorShFileLines(filesToMove)
+    shFileCommonLines = GetCommonCondorShFileLines(filesToMove,mass)
     shFileName = condorDir+"/condor.sh"
     with open(shFileName, 'w') as f:
         f.writelines(shFileCommonLines)
@@ -161,7 +185,7 @@ def WriteCondorFilesLimits(cardWorkspace,mass,quant,betaList,condorDir,asimovToy
         for i, betaId in enumerate(betaList):
             betaVal = betasToScan[betaId]
             if not options.disableSigRescaling:
-                scaleFactor = sigRescaleByMassBetaAndQuantile[str(mass)][str(betaIdx)]['0.5'] 
+                scaleFactor = sigRescaleByMassBetaAndQuantile[str(mass)][str(betaId)]['0.5'] 
             else:
                 scaleFactor = 1.0
             scaleFactor *= betaVal**2
@@ -171,7 +195,8 @@ def WriteCondorFilesLimits(cardWorkspace,mass,quant,betaList,condorDir,asimovToy
             f.write("  betaId={}\n".format(betaId))
             f.write("  rMin={}\n".format(rMin))
             f.write("  rMax={}\n".format(rMax))
-            f.write("  toyFile={}\n".format(asimovToys[i].split("/")[-1]))
+            if useAsimovData:
+                f.write("  toyFile={}\n".format(asimovToys[i].split("/")[-1]))
             f.write("  plotFile=limit_scan_m{}_quant{}_betaId{}.pdf\n".format(mass,str(quant).replace(".","p"),betaId))
             f.write("  combinedGridFile=higgsCombine.betaId{}.HybridNew.mH{}.{}.gridAll.root\n".format(betaId,mass,str(quant).replace(".","p")))
             gridFileListStr = " ".join(gridFiles[str(betaId)])
@@ -186,10 +211,15 @@ def WriteCondorFilesLimits(cardWorkspace,mass,quant,betaList,condorDir,asimovToy
         cmd = "combine {} -M HybridNew --LHCmode LHC-limits --rMin $rMin --rMax $rMax --grid=$combinedGridFile --rAbsAcc 0.00001 --rRelAcc 0.005 --plot $plotFile --readHybridResults -m {} -n .betaId$betaId".format(str(cardWorkspace).split("/")[-1],mass)
         if quant > 0:
             cmd += " --expectedFromGrid={}".format(quant)
-        cmd += " -D $toyFile:toys/toy_asimov"
+        if useAsimovData:
+            cmd += " -D $toyFile:toys/toy_asimov"
+        cmd += " "+commonCombineArgs.format("$sigSF")
         f.write(cmd+"\n\n")
         f.write("ls higgsCombine*\n")
-        f.write("limitOutputFile=higgsCombine.betaId$betaId.HybridNew.mH{}.quant{:.3f}.root\n".format(mass,quant))
+        if quant > 0:
+            f.write("limitOutputFile=higgsCombine.betaId$betaId.HybridNew.mH{}.quant{:.3f}.root\n".format(mass,quant))
+        else:
+            f.write("limitOutputFile=higgsCombine.betaId$betaId.HybridNew.mH{}.root\n".format(mass))
         f.write("xrdcp -fs $plotFile {}/$plotFile\n".format(eosPath))
         f.write("xrdcp -fs $limitOutputFile {}/$limitOutputFile\n".format(eosPath))
         f.write("xrdcp -fs $combinedGridFile {}/$combinedGridFile\n".format(eosPath))
@@ -199,12 +229,16 @@ def WriteCondorFilesLimits(cardWorkspace,mass,quant,betaList,condorDir,asimovToy
 def WriteCondorFilesGridGen(cardWorkspace,mass,quant,betaList,condorDir,asimovToys):
     eosPath = eosDir + "/" + condorDir
     inputFiles = [cardWorkspace] + asimovToys
-    nJobs = len(betaList)* int(50/nGridPointsPerSubFile)
+    if quant == 0.025 or quant == 0.16:
+        nGridPoints = nGridPointsPerSubFileLowQuant
+    else:
+        nGridPoints = nGridPointsPerSubFile
+    nJobs = len(betaList)* int(50/nGridPoints)
     WriteCondorSubFile(condorDir, inputFiles, nJobs)
     filesToMove = []
-    for f in [cardWorkspace]+asimovToys:
-        filesToMove.append(f.split("/")[-1])
-    shFileCommonLines = GetCommonCondorShFileLines(filesToMove)
+    #for f in [cardWorkspace]+asimovToys:
+    #    filesToMove.append(f.split("/")[-1])
+    shFileCommonLines = GetCommonCondorShFileLines(filesToMove,mass)
     shFileName = condorDir+"/condor.sh"
     if quant == 0.025:
         nToys = 40000
@@ -222,8 +256,8 @@ def WriteCondorFilesGridGen(cardWorkspace,mass,quant,betaList,condorDir,asimovTo
                 scaleFactor = 1.0
             betaVal = betasToScan[betaIdx]
             scaleFactor *= betaVal**2
-            jobIdMin = int(50/nGridPointsPerSubFile) * i
-            jobIdMax = jobIdMin + int(50/nGridPointsPerSubFile) - 1
+            jobIdMin = int(50/nGridPoints) * i
+            jobIdMax = jobIdMin + int(50/nGridPoints) - 1
             rMin, rMax = GetRMinAndRMax(mass, quant,betaIdx)
          #   stepSize = (rMax - rMin) / nGridPointsPerSubFile
             f.write("if [[ $1 -ge {} ]] && [[ $1 -le {} ]]; then\n".format(jobIdMin, jobIdMax))
@@ -231,14 +265,15 @@ def WriteCondorFilesGridGen(cardWorkspace,mass,quant,betaList,condorDir,asimovTo
             f.write("  betaId={}\n".format(betaIdx))
             f.write("  rMin={}\n".format(rMin))
             f.write("  rMax={}\n".format(rMax))
-            f.write("  toyFile={}\n".format(asimovToys[i].split("/")[-1]))
+            if len(asimovToys) > 0:
+                f.write("  toyFile={}\n".format(asimovToys[i].split("/")[-1]))
             rVals = np.linspace(rMin,rMax,num=50)
             rValsList = []
             for r in rVals:
                 rValsList.append(str(r))
-            for i in range(int(50/nGridPointsPerSubFile)):
+            for i in range(int(50/nGridPoints)):
                 f.write("  if [[ $1 -eq {} ]]; then\n".format(jobIdMin+i))
-                rValsThisJob = rValsList[i*nGridPointsPerSubFile:(i+1)*nGridPointsPerSubFile]
+                rValsThisJob = rValsList[i*nGridPoints:(i+1)*nGridPoints]
                 f.write("    rVals=\'{}\'\n".format(" ".join(rValsThisJob)))
                 f.write("  fi\n")
             f.write("fi\n\n")
@@ -248,7 +283,8 @@ def WriteCondorFilesGridGen(cardWorkspace,mass,quant,betaList,condorDir,asimovTo
         cmd = "combine -d {} -v1 -M HybridNew --LHCmode LHC-limits --saveHybridResult --saveToys --seed -1 --clsAcc 0 --rMin $rMin --rMax $rMax -T {} -m {} ".format(cardWorkspace.split("/")[-1], nToys, mass)
         if quant > 0:
             cmd += "  --expectedFromGrid {}".format(quant)
-        cmd += " -D $toyFile:toys/toy_asimov"
+        if useAsimovData:
+            cmd += " -D $toyFile:toys/toy_asimov"
         cmd += " "+commonCombineArgs.format("$sigSF")
         #f.write(asimovGenCmd+'\n')
         #f.write("toyFile=$(ls higgsCombine.asimov*.root)\n")
@@ -347,15 +383,20 @@ def CheckCondorJobsAndGetFilenames():
                     for b in betaList:
                         filesToCheck = []
                         if options.submitLimitJobsAfterGridGen:#if we're writing files for the limit jobs, we need to check the output of the gridGen jobs which have multiple out files in each directory per beta
-                            for j in range(int(nGridPoints/nGridPointsPerSubFile)):
+                            if float(quant) < 0.5 and float(quant)>0:
+                                nJobs = int(nGridPoints / nGridPointsPerSubFileLowQuant)
+                            else:
+                                nJobs = int(nGridPoints/nGridPointsPerSubFile)
+                            for j in range(nJobs):
                                 f = dirName+"/gridGen/hybridNewGridGen.M{}.{}/betaIds{}To{}/condor.*.{}.out".format(mass,str(quant).replace(".","p"),betaList[0],betaList[-1],jobId)
                                 filesToCheck.append(f)
+                                #print(f, b, jobId)
                                 jobId+=1
                         else: #check limit jobs, 1 out file per directory per beta
                             filesToCheck = [dirName+"/limits/hybridNewLimits.M{}.{}/betaIds{}To{}/condor.*.{}.out".format(mass,str(quant).replace(".","p"),betaList[0],betaList[-1],jobId)]
                             jobId+=1
                         filesThisBeta = []
-                        for f in filesToCheck:
+                        for i,f in enumerate(filesToCheck):
                             try:
                                 condorFile = FindFile(f)
                             except RuntimeError:
@@ -374,6 +415,7 @@ def CheckCondorJobsAndGetFilenames():
                             gridFile = lastLine.split()[-1].strip()
                             filesThisBeta.append(gridFile)
                         filesDict[str(mass)][str(quant)][str(b)] = filesThisBeta
+                        #filesDict[str(mass)][str(quant)][str(b)]["exp"] = filesExpectedThisBeta
                 progress.advance(task_id)
     if options.submitLimitJobsAfterGridGen:
         outTxtFileName = dirName+"/incompleteGridJenJobs.txt"
@@ -383,6 +425,7 @@ def CheckCondorJobsAndGetFilenames():
         if len(missingFilesList):
             f.write("# The following are missing condor.out files:\n")
             for missingFile in missingFilesList:
+
                 f.write(missingFile+"\n")
         else:
             foundAllFiles = True
@@ -408,17 +451,35 @@ def ReadLimitJobResults(mass,quant,beta,rootFile):
     rLimitsByMassBetaAndQuantile[str(quant)][str(beta)][str(mass)] = limit
     xsecLimitsByMassBetaAndQuantile[str(quant)][str(beta)][str(mass)] = limit * sigSF * xsThByMass[float(mass)]
 
+def CreateComboArrays(xsecLimitsByMassAndQuantile):
+    betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
+    retVal = {}
+    obsLimits = {}
+    for quantile in xsecLimitsByMassAndQuantile.keys():
+        retVal[quantile] = {}
+        retVal[quantile]["betas"] = []
+        retVal[quantile]["massLimits"] = []
+        sortedBetas = sorted([int(beta) for beta in xsecLimitsByMassAndQuantile[quantile].keys()])
+        # for betaVal, mass in xsecLimitsByMassAndQuantile[quantile].items():
+        for betaId in sortedBetas:
+            betaVal = betasToScan[int(betaId)]
+            retVal[quantile]["betas"].append(betaVal)
+            if str(betaId) not in xsecLimitsByMassAndQuantile[quantile].keys():
+                print("Oops! now trying to get out {} from array which does not have it in its keys: {}".format(str(betaVal), xsecLimitsByMassAndQuantile[quantile].keys()))
+            retVal[quantile]["massLimits"].append(float(xsecLimitsByMassAndQuantile[quantile][str(betaId)]))
+    return retVal
 
 #################################################################################
 # Run
 #################################################################################
 if __name__ == "__main__":
     massList = list(range(300,2100,100))
-    #massList = [1800]
+    #massList = [800]
     betasToScan = list(np.linspace(0.0, 1, 500))[:-1] + [0.9995]
     nBetasPerCondorSub = 10
     nGridPoints = 50
-    nGridPointsPerSubFile = 5
+    nGridPointsPerSubFile = 25
+    nGridPointsPerSubFileLowQuant = 10
     eosDir = "root://eoscms.cern.ch//eos/cms/store/group/phys_exotica/leptonsPlusJets/LQ/eipearso"
     eosDirNoPrefix = eosDir[eosDir.rfind("//")+1:]
     quantilesExpected = [0.025, 0.16, 0.5, 0.84, 0.975]
@@ -426,7 +487,12 @@ if __name__ == "__main__":
     xsThFilename = "$LQANA/config/xsection_theory_13TeV_scalarPairLQ.txt"
     sigRescaleFile = "rValues_nominal_betaScan.json"
     commonCombineArgs = " --setParameters signalScaleParam={} --freezeParameters signalScaleParam --trackParameters signalScaleParam"
-    blinded = True
+    blinded = False
+    doObserved = True
+    if doObserved:
+        quantilesExpected.append(-1)
+    useAsimovData = False
+
     sandbox = os.getenv("HOME")+"/sandbox-CMSSW_14_1_0_pre4-8e58ceb.tar.bz2"
     ncores = 6
     parser = OptionParser(
@@ -666,37 +732,39 @@ if __name__ == "__main__":
                     pool.close()
                     pool.join()
         else:
-            if not os.path.isdir(dirName+"/asimovToys"):
-                print("INFO: Making directory", dirName+"/asimovToys")
-                Path(dirName+"/asimovToys").mkdir(exist_ok=True)
+            if useAsimovData:
+                if not os.path.isdir(dirName+"/asimovToys"):
+                    print("INFO: Making directory", dirName+"/asimovToys")
+                    Path(dirName+"/asimovToys").mkdir(exist_ok=True)
             betasToSubmit = GetBetasToSubmit(mass)
             betaLists = SplitBetasBetweenCondorSubmissions(betasToSubmit,nBetasPerCondorSub)
             print("INFO: for mass {}, use beta lists".format(mass), betaLists)
             nCondorFiles = len(betaLists)
             with Progress() as progress:
                 betaIdsToGen = []
-                for betaId in betasToSubmit:
-                    asimovToyFile = FindAsimovToyDataBetaId(mass, betaId, dirName+"/asimovToys")
-                    if asimovToyFile is None:
-                        betaIdsToGen.append(betaId)
-                    else:
-                        dictAsimovToysByBetaId[betaId] = asimovToyFile
-                if len(betaIdsToGen):
-                    task_id = progress.add_task("[cyan]Generating asimov toys for mass {}".format(mass),total = len(betaIdsToGen))
-                    with multiprocessing.Pool(ncores) as pool:
-                        partial_quit = partial(ErrorCallback,pool)
-                        for betaId in betaIdsToGen:
-                            betaVal = betasToScan[betaId]
-                            signalScaleFactor = betaVal**2
-                            try:
-                                pool.apply_async(GenerateAsimovToyDataBetaId,[cardWorkspace,mass,dirName+"/asimovToys",dictAsimovToysByBetaId, betaId, signalScaleFactor],callback = lambda x: progress.advance(task_id), error_callback = partial_quit)
-                            except Exception as e:
-                                print("ERROR: caught exception in asimov toy job for mass {}, betaId {}".format(mass, betaId))
-                                traceback.print_exc()
-                                pool.terminate()
-                                exit(-2)
-                        pool.close()
-                        pool.join()
+                if useAsimovData:
+                    for betaId in betasToSubmit:
+                        asimovToyFile = FindAsimovToyDataBetaId(mass, betaId, dirName+"/asimovToys")
+                        if asimovToyFile is None:
+                         betaIdsToGen.append(betaId)
+                        else:
+                            dictAsimovToysByBetaId[betaId] = asimovToyFile
+                    if len(betaIdsToGen):
+                        task_id = progress.add_task("[cyan]Generating asimov toys for mass {}".format(mass),total = len(betaIdsToGen))
+                        with multiprocessing.Pool(ncores) as pool:
+                            partial_quit = partial(ErrorCallback,pool)
+                            for betaId in betaIdsToGen:
+                                betaVal = betasToScan[betaId]
+                                signalScaleFactor = betaVal**2
+                                try:
+                                    pool.apply_async(GenerateAsimovToyDataBetaId,[cardWorkspace,mass,dirName+"/asimovToys",dictAsimovToysByBetaId, betaId, signalScaleFactor],callback = lambda x: progress.advance(task_id), error_callback = partial_quit)
+                                except Exception as e:
+                                    print("ERROR: caught exception in asimov toy job for mass {}, betaId {}".format(mass, betaId))
+                                    traceback.print_exc()
+                                    pool.terminate()
+                                    exit(-2)
+                            pool.close()
+                            pool.join()
             rValuesAtBeta = rValuesByMassBetaAndQuantile[str(mass)]
             if options.generateGrids:
                 if not os.path.isdir(dirName+"/gridGen"):
@@ -715,8 +783,9 @@ if __name__ == "__main__":
                             if not os.path.isdir(condorDir):
                                 Path(condorDir).mkdir(exist_ok=True)
                             asimovToys = []
-                            for betaId in betaList:
-                                asimovToys.append(str(dictAsimovToysByBetaId[betaId]))
+                            if useAsimovData:
+                                for betaId in betaList:
+                                    asimovToys.append(str(dictAsimovToysByBetaId[betaId]))
                             args = [str(cardWorkspace),mass,quant,betaList,condorDir,asimovToys]
                             try:
                                 pool.apply_async(WriteCondorFilesGridGen,args,callback = lambda x: progress.advance(task_id), error_callback = partial_quit)
@@ -744,8 +813,9 @@ if __name__ == "__main__":
                                 if not os.path.isdir(condorDir):
                                     Path(condorDir).mkdir(exist_ok=True)
                                 asimovToys = []
-                                for betaId in betaList:
-                                    asimovToys.append(str(dictAsimovToysByBetaId[betaId]))
+                                if useAsimovData:
+                                    for betaId in betaList:
+                                        asimovToys.append(str(dictAsimovToysByBetaId[betaId]))
                                 args = [str(cardWorkspace),mass,quant,betaList,condorDir,asimovToys,gridGenFilenamesByMassBetaAndQuantile[str(mass)][str(quant)]]
                                 pool.apply_async(WriteCondorFilesLimits,args,error_callback = partial_quit)
                             except Exception as e:

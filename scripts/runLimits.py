@@ -963,6 +963,9 @@ def ExtractAsymptoticLimitResultTxt(txtFile):
             elif "Expected 97.5%:" in line:
                 quantiles.append(0.975)
                 limits.append(float(line.split("<")[-1].strip()))
+            elif "Observed Limit" in line:
+                quantiles.append(-1)
+                limits.append(float(line.split("<")[-1].strip()))
     return limits, [], quantiles, signalScaleParam
 
 
